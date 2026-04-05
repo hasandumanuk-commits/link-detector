@@ -1135,8 +1135,8 @@ app.get("/links", async (req, res) => {
               <div class="main">
                 <div class="topbar">
                   <div>
-                    <div class="brand-title">KickSight Link Detector</div>
-                    <div class="brand-sub">Realtime Kick Intelligence</div>
+                    <div class="brand-title">HasanD Link Detector</div>
+                    <div class="brand-sub">Gerçek Zamanlı Link Paneli</div>
                   </div>
 
                   <div class="top-actions">
