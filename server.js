@@ -197,41 +197,52 @@ app.get("/subscribe/chat", async (req, res) => {
   try {
     const accessToken = await getAppAccessToken();
 
-    const broadcasterUserId = 93350154;
-
-    const payload = {
-      broadcaster_user_id: broadcasterUserId,
-      events: [
-        {
-          name: "chat.message.sent",
-          version: 1
-        }
-      ]
-    };
-
-    const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${accessToken}`,
-        "Accept": "application/json",
+    const payloads = [
+      {
+        broadcaster_user_id: 93350154,
+        events: [{ name: "chat.message.sent", version: 1 }]
       },
-      body: JSON.stringify(payload),
-    });
+      {
+        broadcaster_user_id: "93350154",
+        events: [{ name: "chat.message.sent", version: 1 }]
+      },
+      {
+        broadcaster_user_id: 93350154,
+        events: [{ name: "chat.message.sent", version: "1" }]
+      },
+      {
+        broadcaster_user_id: "93350154",
+        events: [{ name: "chat.message.sent", version: "1" }]
+      }
+    ];
 
-    const subText = await subRes.text();
+    const results = [];
 
-    res.status(subRes.status).send(
-      "STATUS=" + subRes.status +
-      " | BODY=" + subText +
-      " | PAYLOAD=" + JSON.stringify(payload)
-    );
+    for (const payload of payloads) {
+      const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`,
+          "Accept": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await subRes.text();
+
+      results.push({
+        status: subRes.status,
+        payload,
+        body: text
+      });
+    }
+
+    res.json(results);
   } catch (error) {
     res.status(500).send("Subscribe hatası: " + error.message);
   }
 });
-
-    
 
 app.post("/webhook/kick", async (req, res) => {
   try {
