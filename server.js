@@ -677,14 +677,14 @@ app.get("/links", async (req, res) => {
             * { box-sizing: border-box; }
 
             body {
-              margin: 0;
-              font-family: Arial, sans-serif;
-              color: #e5eefc;
-              background:
-                radial-gradient(circle at top left, rgba(0, 255, 170, 0.08), transparent 28%),
-                radial-gradient(circle at top right, rgba(64, 120, 255, 0.08), transparent 25%),
-                linear-gradient(180deg, #071019 0%, #040811 100%);
-            }
+  margin: 0;
+  font-family: Arial, sans-serif;
+  color: #f5f7fb;
+  background:
+    radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
+    radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
+    linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
+}
 
             a {
               color: inherit;
@@ -712,17 +712,17 @@ app.get("/links", async (req, res) => {
             }
 
             .side-logo {
-              width: 42px;
-              height: 42px;
-              border-radius: 14px;
-              background: linear-gradient(135deg, #0dcf83, #0b6cff);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-weight: bold;
-              color: white;
-              box-shadow: 0 0 18px rgba(13, 207, 131, 0.25);
-            }
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ffd84d, #1d4ed8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  color: #041126;
+  box-shadow: 0 0 18px rgba(255, 216, 77, 0.28);
+}
 
             .side-btn {
               width: 42px;
@@ -738,10 +738,10 @@ app.get("/links", async (req, res) => {
             }
 
             .side-btn.active {
-              background: linear-gradient(135deg, #0dcf83, #0d9b75);
-              color: #05140f;
-              font-weight: bold;
-            }
+  background: linear-gradient(135deg, #ffd84d, #facc15);
+  color: #0b1b44;
+  font-weight: bold;
+}
 
             .content {
               flex: 1;
@@ -817,10 +817,10 @@ app.get("/links", async (req, res) => {
             }
 
             .top-btn.green {
-              background: linear-gradient(135deg, #0dcf83, #0d9b75);
-              color: #04150f;
-              border: none;
-            }
+  background: linear-gradient(135deg, #0dcf83, #0d9b75);
+  color: #04150f;
+  border: none;
+}
 
             .search-panel,
             .filter-panel,
@@ -975,14 +975,14 @@ app.get("/links", async (req, res) => {
             }
 
             .user-badge {
-              padding: 5px 9px;
-              border-radius: 999px;
-              background: rgba(13, 207, 131, 0.12);
-              border: 1px solid rgba(13, 207, 131, 0.28);
-              color: #78efb5;
-              font-size: 11px;
-              font-weight: 700;
-            }
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 216, 77, 0.12);
+  border: 1px solid rgba(255, 216, 77, 0.32);
+  color: #ffe27a;
+  font-size: 11px;
+  font-weight: 700;
+}
 
             .message-line {
               color: #e9f1ff;
@@ -1169,13 +1169,12 @@ app.get("/links", async (req, res) => {
 
                 <div class="filter-panel">
                   <div class="chip-row">
-                    <div class="chip">Tüm Linkler</div>
-                    <div class="chip blue">#gündem</div>
-                    <div class="chip green">#futbol</div>
-                    <div class="chip pink">#drama</div>
-                    <div class="chip orange">#yemek</div>
-                    <div class="chip blue">#haber</div>
-                  </div>
+  <div class="chip">Tüm Linkler</div>
+  <div class="chip blue">#fenerbahçe</div>
+  <div class="chip green">#futbol</div>
+  <div class="chip blue">#haber</div>
+  <div class="chip orange">#yemek</div>
+</div>
                 </div>
 
                 ${
