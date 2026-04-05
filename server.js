@@ -220,17 +220,6 @@ app.post("/login", (req, res) => {
   return res.redirect("/login?error=1");
 });
 
-app.post("/login", (req, res) => {
-  const { username, password } = req.body;
-
-  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    req.session.isAuthenticated = true;
-    return res.redirect("/links");
-  }
-
-  return res.redirect("/login?error=1");
-});
-
 app.get("/", requireAuth, (req, res) => {
   res.send(`
     <html>
