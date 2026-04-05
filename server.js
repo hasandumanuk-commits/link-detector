@@ -215,6 +215,9 @@ async function getAppAccessToken() {
 
   return tokenData.access_token;
 }
+app.get("/logo.png", (req, res) => {
+  res.sendFile(__dirname + "/logo.png");
+});
 
 app.get("/login", (req, res) => {
   if (req.session && req.session.isAuthenticated) {
