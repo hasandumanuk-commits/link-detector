@@ -11,7 +11,7 @@ const APP_URL = process.env.APP_URL;
 const DATABASE_URL = process.env.DATABASE_URL;
 const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
 const KICK_CLIENT_SECRET = process.env.KICK_CLIENT_SECRET;
-const KICK_CHANNEL_SLUG = process.env.KICK_CHANNEL_SLUG; // örn: hsndmn1907
+const KICK_CHANNEL_SLUG = process.env.KICK_CHANNEL_SLUG;
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -42,6 +42,14 @@ function extractLinks(text) {
   if (!text || typeof text !== "string") return [];
   const matches = text.match(/https?:\/\/[^\s]+/gi);
   return matches || [];
+}
+
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function ensureTables() {
@@ -87,7 +95,52 @@ async function getAppAccessToken() {
 }
 
 app.get("/", (req, res) => {
-  res.send("Link Detector çalışıyor");
+  res.send(`
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Link Detector</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: #0f1115;
+            color: white;
+            padding: 30px;
+          }
+          a {
+            color: #8b5cf6;
+            text-decoration: none;
+          }
+          .box {
+            background: #181c23;
+            border: 1px solid #2b3240;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 700px;
+          }
+          h1 {
+            margin-top: 0;
+          }
+          ul {
+            line-height: 1.9;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="box">
+          <h1>Link Detector çalışıyor</h1>
+          <ul>
+            <li><a href="/health">/health</a></li>
+            <li><a href="/links">/links</a></li>
+            <li><a href="/links/json">/links/json</a></li>
+            <li><a href="/find/broadcaster">/find/broadcaster</a></li>
+            <li><a href="/subscribe/chat">/subscribe/chat</a></li>
+            <li><a href="/auth/kick">/auth/kick</a></li>
+          </ul>
+        </div>
+      </body>
+    </html>
+  `);
 });
 
 app.get("/health", (req, res) => {
@@ -178,8 +231,8 @@ app.get("/find/broadcaster", async (req, res) => {
       `https://api.kick.com/public/v1/channels?slug=${encodeURIComponent(KICK_CHANNEL_SLUG)}`,
       {
         headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Accept": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
         },
       }
     );
@@ -200,20 +253,20 @@ app.get("/subscribe/chat", async (req, res) => {
     const payloads = [
       {
         broadcaster_user_id: 93350154,
-        events: [{ name: "chat.message.sent", version: 1 }]
+        events: [{ name: "chat.message.sent", version: 1 }],
       },
       {
         broadcaster_user_id: "93350154",
-        events: [{ name: "chat.message.sent", version: 1 }]
+        events: [{ name: "chat.message.sent", version: 1 }],
       },
       {
         broadcaster_user_id: 93350154,
-        events: [{ name: "chat.message.sent", version: "1" }]
+        events: [{ name: "chat.message.sent", version: "1" }],
       },
       {
         broadcaster_user_id: "93350154",
-        events: [{ name: "chat.message.sent", version: "1" }]
-      }
+        events: [{ name: "chat.message.sent", version: "1" }],
+      },
     ];
 
     const results = [];
@@ -223,8 +276,8 @@ app.get("/subscribe/chat", async (req, res) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${accessToken}`,
-          "Accept": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
         },
         body: JSON.stringify(payload),
       });
@@ -234,7 +287,7 @@ app.get("/subscribe/chat", async (req, res) => {
       results.push({
         status: subRes.status,
         payload,
-        body: text
+        body: text,
       });
     }
 
@@ -279,6 +332,24 @@ app.post("/webhook/kick", async (req, res) => {
   }
 });
 
+app.get("/links/json", async (req, res) => {
+  try {
+    await ensureTables();
+
+    const result = await pool.query(`
+      SELECT id, message_text, extracted_links, raw_data, created_at
+      FROM links
+      ORDER BY id DESC
+      LIMIT 100
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error("LINKS JSON ERROR:", error);
+    res.status(500).send("Links json hatası: " + error.message);
+  }
+});
+
 app.get("/links", async (req, res) => {
   try {
     await ensureTables();
@@ -287,13 +358,166 @@ app.get("/links", async (req, res) => {
       SELECT id, message_text, extracted_links, created_at
       FROM links
       ORDER BY id DESC
-      LIMIT 50
+      LIMIT 100
     `);
 
-    res.json(result.rows);
+    const rows = result.rows;
+
+    const cards = rows
+      .map((row) => {
+        let parsedLinks = [];
+        try {
+          parsedLinks = JSON.parse(row.extracted_links || "[]");
+        } catch (e) {
+          parsedLinks = [];
+        }
+
+        const linksHtml =
+          parsedLinks.length > 0
+            ? parsedLinks
+                .map(
+                  (link) =>
+                    `<a href="${escapeHtml(link)}" target="_blank">${escapeHtml(link)}</a>`
+                )
+                .join("<br>")
+            : "<span class='muted'>Link bulunamadı</span>";
+
+        return `
+          <div class="card">
+            <div class="top">
+              <div><strong>ID:</strong> ${row.id}</div>
+              <div><strong>Tarih:</strong> ${new Date(row.created_at).toLocaleString("tr-TR")}</div>
+            </div>
+
+            <div class="section">
+              <div class="label">Mesaj</div>
+              <div class="text">${escapeHtml(row.message_text || "") || "<span class='muted'>Boş</span>"}</div>
+            </div>
+
+            <div class="section">
+              <div class="label">Bulunan Linkler</div>
+              <div class="text">${linksHtml}</div>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    res.send(`
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Link Detector Panel</title>
+          <style>
+            body {
+              margin: 0;
+              font-family: Arial, sans-serif;
+              background: #0f1115;
+              color: #fff;
+            }
+            .wrap {
+              max-width: 1100px;
+              margin: 0 auto;
+              padding: 24px;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 16px;
+              margin-bottom: 24px;
+              flex-wrap: wrap;
+            }
+            .title {
+              font-size: 28px;
+              font-weight: 700;
+            }
+            .sub {
+              color: #9ca3af;
+              margin-top: 8px;
+            }
+            .actions a {
+              display: inline-block;
+              background: #8b5cf6;
+              color: white;
+              text-decoration: none;
+              padding: 10px 14px;
+              border-radius: 10px;
+              margin-right: 10px;
+            }
+            .card {
+              background: #181c23;
+              border: 1px solid #2b3240;
+              border-radius: 14px;
+              padding: 18px;
+              margin-bottom: 16px;
+            }
+            .top {
+              display: flex;
+              justify-content: space-between;
+              gap: 16px;
+              flex-wrap: wrap;
+              margin-bottom: 16px;
+              color: #cbd5e1;
+            }
+            .section {
+              margin-bottom: 14px;
+            }
+            .label {
+              color: #8b5cf6;
+              font-size: 13px;
+              font-weight: 700;
+              margin-bottom: 8px;
+              text-transform: uppercase;
+            }
+            .text {
+              background: #11151b;
+              border: 1px solid #232935;
+              border-radius: 10px;
+              padding: 12px;
+              line-height: 1.6;
+              word-break: break-word;
+            }
+            .muted {
+              color: #9ca3af;
+            }
+            .empty {
+              background: #181c23;
+              border: 1px solid #2b3240;
+              border-radius: 14px;
+              padding: 24px;
+              color: #9ca3af;
+            }
+            a {
+              color: #a78bfa;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="header">
+              <div>
+                <div class="title">Link Detector Panel</div>
+                <div class="sub">Son 100 kayıt burada görünür.</div>
+              </div>
+              <div class="actions">
+                <a href="/links/json" target="_blank">JSON Gör</a>
+                <a href="/" target="_blank">Ana Sayfa</a>
+              </div>
+            </div>
+
+            ${
+              rows.length > 0
+                ? cards
+                : "<div class='empty'>Henüz kayıt yok. Webhook gelince burada görünecek.</div>"
+            }
+          </div>
+        </body>
+      </html>
+    `);
   } catch (error) {
-    console.error("LINKS LIST ERROR:", error);
-    res.status(500).send("Links listeleme hatası: " + error.message);
+    console.error("LINKS PAGE ERROR:", error);
+    res.status(500).send("Links sayfası hatası: " + error.message);
   }
 });
 
