@@ -123,6 +123,7 @@ app.get("/callback", async (req, res) => {
     res.status(500).send("Callback hatası: " + error.message);
   }
 });
+
 app.get("/subscribe/chat", async (req, res) => {
   try {
     const tokenResult = await pool.query(
