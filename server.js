@@ -1465,9 +1465,13 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
             }
             .search-btn, .mini-btn, .bulk-btn, .domain-btn {
-              background: #6d28d9;
-              color: white;
-            }
+  background: linear-gradient(135deg, #ffd84d, #facc15);
+  color: #0b1b44;
+  border: 1px solid rgba(255, 216, 77, 0.35);
+}
+.search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
+  filter: brightness(1.05);
+}
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
