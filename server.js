@@ -417,21 +417,6 @@ app.get("/subscribe/chat", async (req, res) => {
   }
 });
 
-      const text = await subRes.text();
-
-      results.push({
-        status: subRes.status,
-        payload,
-        body: text,
-      });
-    }
-
-    res.json(results);
-  } catch (error) {
-    res.status(500).send("Subscribe hatası: " + error.message);
-  }
-});
-
 app.post("/webhook/kick", async (req, res) => {
   try {
     const payload = req.body || {};
