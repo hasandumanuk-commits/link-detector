@@ -238,26 +238,46 @@ app.get("/login", (req, res) => {
             justify-content: center;
             font-family: Arial, sans-serif;
             background:
-              radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
-              radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
-              linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
+              radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
+              radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
+              radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
+              linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
             color: white;
           }
           .card {
             width: 100%;
             max-width: 430px;
-            background: rgba(8, 16, 28, 0.94);
-            border: 1px solid rgba(72, 91, 122, 0.28);
-            border-radius: 22px;
-            padding: 28px;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+            background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
+            border: 1px solid rgba(102, 126, 173, 0.22);
+            border-radius: 26px;
+            padding: 30px;
+            box-shadow:
+              0 18px 40px rgba(0, 0, 0, 0.32),
+              inset 0 1px 0 rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(10px);
           }
-          h1 { margin: 0 0 8px 0; font-size: 30px; }
-          .sub { color: #b7c5e0; margin-bottom: 22px; }
+          .logo-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 18px;
+          }
+          .logo {
+            width: 86px;
+            height: 86px;
+            border-radius: 50%;
+            object-fit: cover;
+            box-shadow:
+              0 0 24px rgba(255, 216, 77, 0.18),
+              inset 0 1px 0 rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.08);
+            background: #111;
+          }
+          h1 { margin: 0 0 8px 0; font-size: 30px; text-align: center; }
+          .sub { color: #b7c5e0; margin-bottom: 22px; text-align: center; }
           .input {
             width: 100%;
-            background: #07111c;
-            border: 1px solid rgba(73, 95, 130, 0.35);
+            background: linear-gradient(180deg, #0a1524, #07111c);
+            border: 1px solid rgba(96, 120, 168, 0.22);
             border-radius: 14px;
             padding: 14px;
             color: white;
@@ -271,8 +291,11 @@ app.get("/login", (req, res) => {
             padding: 14px;
             font-weight: 700;
             cursor: pointer;
-            background: linear-gradient(135deg, #ffd84d, #facc15);
+            background: linear-gradient(135deg, #ffe37a, #facc15);
             color: #0b1b44;
+            box-shadow:
+              0 0 18px rgba(250, 204, 21, 0.18),
+              inset 0 1px 0 rgba(255,255,255,0.20);
           }
           .error {
             background: rgba(220, 38, 38, 0.12);
@@ -286,6 +309,9 @@ app.get("/login", (req, res) => {
       </head>
       <body>
         <form class="card" method="POST" action="/login">
+          <div class="logo-wrap">
+            <img class="logo" src="/logo.png" alt="Logo" />
+          </div>
           <h1>HasanD Link Detector</h1>
           <div class="sub">Panele girmek için giriş yap.</div>
           ${error ? `<div class="error">${error}</div>` : ""}
@@ -319,141 +345,7 @@ app.get("/logout", requireAuth, async (req, res) => {
 });
 
 app.get("/", requireAuth, (req, res) => {
-  res.send(`
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>HasanD Link Detector</title>
-        <style>
-          * { box-sizing: border-box; }
-          body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: linear-gradient(180deg, #0b0f17 0%, #111827 100%);
-            color: white;
-          }
-          .wrap {
-            max-width: 1100px;
-            margin: 0 auto;
-            padding: 40px 24px;
-          }
-          .hero {
-            background: #151b24;
-            border: 1px solid #2a3240;
-            border-radius: 20px;
-            padding: 32px;
-            margin-bottom: 24px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-          }
-          .badge {
-            display: inline-block;
-            background: rgba(139, 92, 246, 0.15);
-            color: #c4b5fd;
-            border: 1px solid rgba(139, 92, 246, 0.35);
-            padding: 8px 12px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-bottom: 16px;
-            letter-spacing: 0.5px;
-          }
-          h1 { margin: 0 0 12px 0; font-size: 38px; }
-          .desc { color: #aab3c2; font-size: 16px; line-height: 1.7; max-width: 760px; }
-          .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 16px;
-            margin-top: 28px;
-          }
-          .card {
-            background: #11161f;
-            border: 1px solid #273142;
-            border-radius: 16px;
-            padding: 18px;
-          }
-          .card-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
-          .card-text { color: #9ca3af; line-height: 1.6; font-size: 14px; min-height: 66px; }
-          .btn {
-            display: inline-block;
-            margin-top: 14px;
-            background: #8b5cf6;
-            color: white;
-            text-decoration: none;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 14px;
-            font-weight: bold;
-          }
-          .btn.secondary {
-            background: #1c2431;
-            border: 1px solid #334155;
-          }
-          .footer-box {
-            background: #151b24;
-            border: 1px solid #2a3240;
-            border-radius: 18px;
-            padding: 24px;
-          }
-          .footer-title { font-size: 20px; font-weight: bold; margin-bottom: 10px; }
-          .footer-text { color: #9ca3af; line-height: 1.7; }
-          .list { margin: 14px 0 0 0; padding-left: 18px; color: #cbd5e1; line-height: 1.9; }
-          a { color: inherit; }
-        </style>
-      </head>
-      <body>
-        <div class="wrap">
-          <div class="hero">
-            <div class="badge">HASAND LINK DETECTOR</div>
-            <h1>Kontrol Merkezi</h1>
-            <div class="desc">
-              Link kayıtları, risk etiketleri, moderasyon notları, export araçları ve domain listeleri burada.
-            </div>
-
-            <div class="grid">
-              <div class="card">
-                <div class="card-title">Panel</div>
-                <div class="card-text">Tüm kayıtları gelişmiş görünümde açar.</div>
-                <a class="btn" href="/links">Panele Git</a>
-              </div>
-
-              <div class="card">
-                <div class="card-title">JSON</div>
-                <div class="card-text">Ham kayıtların JSON çıktısı.</div>
-                <a class="btn secondary" href="/links/json">JSON Aç</a>
-              </div>
-
-              <div class="card">
-                <div class="card-title">CSV</div>
-                <div class="card-text">Kayıtları CSV olarak indir.</div>
-                <a class="btn secondary" href="/links/export/csv">CSV Aç</a>
-              </div>
-
-              <div class="card">
-                <div class="card-title">Çıkış</div>
-                <div class="card-text">Panel oturumunu güvenli şekilde kapat.</div>
-                <a class="btn secondary" href="/logout">Çıkış Yap</a>
-              </div>
-            </div>
-          </div>
-
-          <div class="footer-box">
-            <div class="footer-title">Durum</div>
-            <div class="footer-text">
-              Panel hazır. Webhook tarafı geldiğinde kayıtlar otomatik düşecek.
-            </div>
-            <ul class="list">
-              <li>Login aktif</li>
-              <li>Panel aktif</li>
-              <li>Risk etiketi aktif</li>
-              <li>Durum ve not sistemi aktif</li>
-              <li>Soft delete aktif</li>
-              <li>Whitelist / blacklist aktif</li>
-            </ul>
-          </div>
-        </div>
-      </body>
-    </html>
-  `);
+  res.redirect("/links");
 });
 
 app.get("/health", requireAuth, (req, res) => {
@@ -1036,7 +928,6 @@ app.get("/links", requireAuth, async (req, res) => {
 
     whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
     values.push(deletedFilter);
-    idx++;
 
     const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
 
@@ -1293,9 +1184,10 @@ app.get("/links", requireAuth, async (req, res) => {
               font-family: Arial, sans-serif;
               color: #f5f7fb;
               background:
-                radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
-                radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
-                linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
+                radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
+                radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
+                radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
+                linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
             }
             a { color: inherit; text-decoration: none; }
 
@@ -1305,46 +1197,61 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 14px;
               padding: 14px;
             }
+
             .sidebar {
-              width: 72px;
-              background: rgba(8, 16, 28, 0.92);
-              border: 1px solid rgba(72, 91, 122, 0.28);
-              border-radius: 20px;
-              padding: 14px 10px;
+              width: 76px;
+              background: linear-gradient(180deg, rgba(9, 18, 33, 0.95), rgba(6, 12, 24, 0.92));
+              border: 1px solid rgba(102, 126, 173, 0.20);
+              border-radius: 24px;
+              padding: 16px 10px;
               display: flex;
               flex-direction: column;
               align-items: center;
               gap: 12px;
-              box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+              box-shadow:
+                0 18px 40px rgba(0,0,0,0.34),
+                inset 0 1px 0 rgba(255,255,255,0.03);
             }
+
             .side-logo {
-              width: 42px;
-              height: 42px;
-              border-radius: 14px;
-              background: linear-gradient(135deg, #ffd84d, #1d4ed8);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-weight: bold;
-              color: #041126;
-              box-shadow: 0 0 18px rgba(255, 216, 77, 0.28);
+              width: 48px;
+              height: 48px;
+              border-radius: 50%;
+              object-fit: cover;
+              box-shadow:
+                0 0 22px rgba(255, 216, 77, 0.26),
+                inset 0 1px 0 rgba(255,255,255,0.25);
+              border: 1px solid rgba(255,255,255,0.08);
+              background: #111;
             }
+
             .side-btn {
-              width: 42px;
-              height: 42px;
-              border-radius: 14px;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              background: #0a1320;
+              width: 44px;
+              height: 44px;
+              border-radius: 16px;
+              border: 1px solid rgba(92, 117, 164, 0.26);
+              background: linear-gradient(180deg, #0c1728, #08111e);
               color: #d3def5;
               display: flex;
               align-items: center;
               justify-content: center;
               font-size: 15px;
+              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
+
+            .side-btn:hover {
+              transform: translateY(-2px);
+              border-color: rgba(255, 221, 87, 0.30);
+              box-shadow: 0 8px 18px rgba(0,0,0,0.28);
+            }
+
             .side-btn.active {
-              background: linear-gradient(135deg, #ffd84d, #facc15);
+              background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               font-weight: bold;
+              box-shadow:
+                0 0 18px rgba(250, 204, 21, 0.24),
+                inset 0 1px 0 rgba(255,255,255,0.25);
             }
 
             .content {
@@ -1355,29 +1262,47 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .topbar, .search-panel, .filter-panel, .bulk-panel, .feed-card, .right-card {
-              background: rgba(8, 16, 28, 0.92);
-              border: 1px solid rgba(72, 91, 122, 0.28);
-              box-shadow: 0 12px 30px rgba(0,0,0,0.22);
+              background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
+              border: 1px solid rgba(102, 126, 173, 0.22);
+              box-shadow:
+                0 18px 40px rgba(0, 0, 0, 0.32),
+                inset 0 1px 0 rgba(255, 255, 255, 0.03);
+              backdrop-filter: blur(10px);
             }
 
             .topbar {
-              border-radius: 20px;
-              padding: 16px 18px;
+              border-radius: 24px;
+              padding: 18px 22px;
               display: flex;
               justify-content: space-between;
               align-items: center;
               gap: 16px;
-              margin-bottom: 14px;
+              margin-bottom: 16px;
+              position: relative;
+              overflow: hidden;
             }
+
+            .topbar::before {
+              content: "";
+              position: absolute;
+              inset: 0;
+              background: linear-gradient(90deg, rgba(255, 221, 87, 0.04), transparent 35%, rgba(59, 130, 246, 0.05));
+              pointer-events: none;
+            }
+
             .brand-title {
               font-size: 18px;
               font-weight: 700;
               margin-bottom: 3px;
+              text-shadow: 0 0 16px rgba(255, 221, 87, 0.08);
             }
+
             .brand-sub {
               color: #c8d4ef;
               font-size: 12px;
+              letter-spacing: 0.2px;
             }
+
             .top-actions {
               display: flex;
               gap: 10px;
@@ -1385,41 +1310,69 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               justify-content: flex-end;
             }
+
             .stat-pill {
-              min-width: 100px;
-              background: #0b1421;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              border-radius: 16px;
-              padding: 10px 14px;
+              min-width: 108px;
+              background: linear-gradient(180deg, #0e1828, #091321);
+              border: 1px solid rgba(96, 120, 168, 0.24);
+              border-radius: 18px;
+              padding: 11px 15px;
               text-align: center;
+              box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
             }
+
             .stat-label {
               color: #7b8aa8;
               font-size: 11px;
               margin-bottom: 3px;
+              letter-spacing: 0.2px;
             }
+
             .stat-value {
-              font-size: 18px;
-              font-weight: 700;
+              font-size: 22px;
+              font-weight: 800;
+              letter-spacing: 0.2px;
             }
+
             .top-btn {
-              background: #0b1421;
-              border: 1px solid rgba(73, 95, 130, 0.35);
+              background: linear-gradient(180deg, #101b2b, #0a1320);
+              border: 1px solid rgba(92, 117, 164, 0.24);
               color: white;
               border-radius: 14px;
-              padding: 10px 14px;
+              padding: 10px 15px;
               font-weight: 700;
+              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
+
+            .top-btn:hover {
+              transform: translateY(-2px);
+              box-shadow: 0 10px 20px rgba(0,0,0,0.24);
+              border-color: rgba(255, 221, 87, 0.24);
+            }
+
             .top-btn.green {
-              background: linear-gradient(135deg, #ffd84d, #facc15);
+              background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: none;
+              box-shadow:
+                0 0 18px rgba(250, 204, 21, 0.18),
+                inset 0 1px 0 rgba(255,255,255,0.20);
             }
 
             .search-panel, .filter-panel, .bulk-panel, .right-card {
-              border-radius: 18px;
-              padding: 14px;
+              border-radius: 22px;
+              padding: 18px;
               margin-bottom: 12px;
+              position: relative;
+              overflow: hidden;
+            }
+
+            .right-card::before {
+              content: "";
+              position: absolute;
+              inset: 0;
+              background: linear-gradient(90deg, rgba(255,255,255,0.015), transparent 45%, rgba(255,221,87,0.02));
+              pointer-events: none;
             }
 
             .search-row, .chip-row {
@@ -1435,26 +1388,35 @@ app.get("/links", requireAuth, async (req, res) => {
               display: flex;
               align-items: center;
               gap: 10px;
-              background: #07111c;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              border-radius: 14px;
+              background: linear-gradient(180deg, #0a1524, #07111c);
+              border: 1px solid rgba(96, 120, 168, 0.22);
+              border-radius: 16px;
               padding: 12px 14px;
+              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
 
             .search-input, .select, .note-input {
-              background: #07111c;
-              border: 1px solid rgba(73, 95, 130, 0.35);
+              background: linear-gradient(180deg, #0a1524, #07111c);
+              border: 1px solid rgba(96, 120, 168, 0.22);
               outline: none;
               color: white;
               font-size: 14px;
-              border-radius: 12px;
+              border-radius: 14px;
               padding: 10px 12px;
+              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
+
             .search-input {
               flex: 1;
               background: transparent;
               border: none;
               padding: 0;
+              box-shadow: none;
+            }
+
+            .select:focus, .note-input:focus {
+              border-color: rgba(255, 221, 87, 0.28);
+              box-shadow: 0 0 0 3px rgba(255, 221, 87, 0.08);
             }
 
             .search-btn, .clear-btn, .mini-btn, .bulk-btn, .domain-btn, .domain-del {
@@ -1464,31 +1426,39 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 12px;
               font-weight: 700;
             }
+
             .search-btn, .mini-btn, .bulk-btn, .domain-btn {
-  background: linear-gradient(135deg, #ffd84d, #facc15);
-  color: #0b1b44;
-  border: 1px solid rgba(255, 216, 77, 0.35);
-}
-.search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
-  filter: brightness(1.05);
-}
+              background: linear-gradient(135deg, #ffe37a, #facc15);
+              color: #0b1b44;
+              border: 1px solid rgba(255, 216, 77, 0.35);
+              transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+            }
+
+            .search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
+              transform: translateY(-2px);
+              box-shadow: 0 10px 20px rgba(0,0,0,0.22);
+              filter: brightness(1.04);
+            }
+
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
               border: 1px solid rgba(73, 95, 130, 0.35);
             }
+
             .domain-del {
               background: rgba(220, 38, 38, 0.16);
               color: #ffb4b4;
             }
 
             .chip {
-              padding: 9px 12px;
+              padding: 9px 13px;
               border-radius: 999px;
-              background: #0b1421;
-              border: 1px solid rgba(73, 95, 130, 0.35);
+              background: linear-gradient(180deg, #0f1b2d, #091321);
+              border: 1px solid rgba(92, 117, 164, 0.22);
               font-size: 12px;
               color: #b6c4df;
+              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
             .chip.green { color: #79f0b6; border-color: rgba(13, 207, 131, 0.35); }
             .chip.pink { color: #f4a5d6; border-color: rgba(255, 95, 162, 0.35); }
@@ -1509,12 +1479,21 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-card {
-              border-radius: 18px;
-              padding: 16px;
+              border-radius: 22px;
+              padding: 18px;
               display: grid;
               grid-template-columns: 190px 1fr 70px;
-              gap: 16px;
+              gap: 18px;
               align-items: start;
+              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            }
+
+            .feed-card:hover {
+              transform: translateY(-2px);
+              border-color: rgba(255, 221, 87, 0.18);
+              box-shadow:
+                0 20px 40px rgba(0,0,0,0.30),
+                inset 0 1px 0 rgba(255,255,255,0.03);
             }
 
             .feed-left {
@@ -1522,6 +1501,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: center;
             }
+
             .bulk-checkbox {
               width: 18px;
               height: 18px;
@@ -1601,18 +1581,21 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 8px;
               word-break: break-word;
             }
+
             .link-line a {
               color: #74c4ff;
               font-size: 14px;
               font-weight: 700;
               word-break: break-all;
             }
+
             .extra-links {
               margin-top: 10px;
               display: flex;
               flex-wrap: wrap;
               gap: 8px;
             }
+
             .mini-link {
               font-size: 11px;
               color: #b5c6e7;
@@ -1635,6 +1618,7 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               align-items: center;
             }
+
             .note-input {
               flex: 1;
               min-width: 180px;
@@ -1646,6 +1630,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: flex-end;
             }
+
             .feed-actions form { margin: 0; }
 
             .icon-btn {
@@ -1661,22 +1646,27 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               cursor: pointer;
             }
+
             .icon-btn.danger {
               color: #ff9baa !important;
               border-color: rgba(220, 38, 38, 0.35);
             }
+
             .icon-btn.restore {
               color: #9ae6b4 !important;
               border-color: rgba(34, 197, 94, 0.35);
             }
 
             .empty-box {
-              background: rgba(8, 16, 28, 0.92);
-              border: 1px solid rgba(72, 91, 122, 0.28);
-              border-radius: 18px;
-              padding: 26px;
-              color: #8fa0bf;
+              background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
+              border: 1px solid rgba(102, 126, 173, 0.20);
+              border-radius: 22px;
+              padding: 34px 26px;
+              color: #a8b7d2;
               text-align: center;
+              box-shadow:
+                0 18px 40px rgba(0,0,0,0.24),
+                inset 0 1px 0 rgba(255,255,255,0.03);
             }
 
             .right {
@@ -1684,14 +1674,25 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-direction: column;
               gap: 14px;
             }
-            .right-card { border-radius: 18px; padding: 16px; }
-            .right-title { font-size: 13px; color: #8fa0bf; margin-bottom: 12px; }
+
+            .right-card {
+              border-radius: 22px;
+              padding: 18px;
+            }
+
+            .right-title {
+              font-size: 13px;
+              color: #8fa0bf;
+              margin-bottom: 12px;
+              letter-spacing: 0.2px;
+            }
 
             .panel-buttons {
               display: grid;
               grid-template-columns: repeat(2, 1fr);
               gap: 10px;
             }
+
             .mini-panel-btn {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
@@ -1708,18 +1709,27 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 8px;
               margin-top: 12px;
             }
+
             .domain-item, .audit-item {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
               border-radius: 12px;
               padding: 10px;
+              transition: transform 0.16s ease, border-color 0.16s ease;
             }
+
+            .audit-item:hover, .domain-item:hover {
+              transform: translateY(-1px);
+              border-color: rgba(255, 221, 87, 0.16);
+            }
+
             .domain-item {
               display: flex;
               justify-content: space-between;
               align-items: center;
               gap: 8px;
             }
+
             .audit-top {
               display: flex;
               justify-content: space-between;
@@ -1727,6 +1737,7 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 12px;
               margin-bottom: 6px;
             }
+
             .audit-bottom {
               color: #c9d7ef;
               font-size: 12px;
@@ -1737,6 +1748,7 @@ app.get("/links", requireAuth, async (req, res) => {
               .content { grid-template-columns: 1fr; }
               .right { order: -1; }
             }
+
             @media (max-width: 900px) {
               .feed-card { grid-template-columns: 1fr; }
               .feed-actions {
@@ -1744,6 +1756,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 justify-content: flex-start;
               }
             }
+
             @media (max-width: 800px) {
               .app-shell { display: block; padding: 10px; }
               .sidebar {
@@ -1758,7 +1771,7 @@ app.get("/links", requireAuth, async (req, res) => {
         <body>
           <div class="app-shell">
             <div class="sidebar">
-              <a class="side-logo" href="/links">K</a>
+              <a href="/links"><img class="side-logo" src="/logo.png" alt="Logo" /></a>
               <a class="side-btn active" href="/links">≡</a>
               <a class="side-btn" href="/">⌂</a>
               <a class="side-btn" href="/links/json">J</a>
