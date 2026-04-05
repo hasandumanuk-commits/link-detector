@@ -383,37 +383,39 @@ app.get("/subscribe/chat", async (req, res) => {
   try {
     const accessToken = await getAppAccessToken();
 
-    const payloads = [
-      {
-        broadcaster_user_id: 93350154,
-        events: [{ name: "chat.message.sent", version: 1 }],
-      },
-      {
-        broadcaster_user_id: "93350154",
-        events: [{ name: "chat.message.sent", version: 1 }],
-      },
-      {
-        broadcaster_user_id: 93350154,
-        events: [{ name: "chat.message.sent", version: "1" }],
-      },
-      {
-        broadcaster_user_id: "93350154",
-        events: [{ name: "chat.message.sent", version: "1" }],
-      },
-    ];
+    const broadcasterUserId = 93350154;
 
-    const results = [];
+    const payload = {
+      broadcaster_user_id: broadcasterUserId,
+      events: [
+        {
+          name: "chat.message.sent",
+          version: 1
+        }
+      ]
+    };
 
-    for (const payload of payloads) {
-      const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+    const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const bodyText = await subRes.text();
+
+    res.status(subRes.status).send(
+      "STATUS=" + subRes.status +
+      " | BODY=" + bodyText +
+      " | PAYLOAD=" + JSON.stringify(payload)
+    );
+  } catch (error) {
+    res.status(500).send("Subscribe hatası: " + error.message);
+  }
+});
 
       const text = await subRes.text();
 
