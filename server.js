@@ -152,14 +152,11 @@ app.get("/subscribe/chat", async (req, res) => {
         "Authorization": `Bearer ${accessToken}`
       },
       body: JSON.stringify({
-        events: [
-          {
-            name: "chat.message.sent",
-            version: 1
-          }
-        ]
-      })
-    });
+  event: {
+    name: "chat.message.sent",
+    version: 1
+  }
+})
 
     const subData = await subRes.text();
     console.log("SUBSCRIBE RESPONSE:", subData);
