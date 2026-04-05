@@ -126,19 +126,23 @@ app.get("/callback", async (req, res) => {
 
 app.get("/subscribe/chat", async (req, res) => {
   try {
-    const tokenResult = await pool.query(
-      `SELECT raw_data FROM oauth_tokens ORDER BY id DESC LIMIT 1`
-    );
+    const appTokenRes = await fetch("https://id.kick.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: KICK_CLIENT_ID,
+        client_secret: KICK_CLIENT_SECRET,
+      }),
+    });
 
-    if (!tokenResult.rows.length) {
-      return res.status(400).send("Kayıtlı token yok");
-    }
-
-    const tokenData = JSON.parse(tokenResult.rows[0].raw_data);
-    const accessToken = tokenData.access_token;
+    const appTokenData = await appTokenRes.json();
+    const accessToken = appTokenData.access_token;
 
     if (!accessToken) {
-      return res.status(400).send("Access token bulunamadı");
+      return res.status(400).send("App access token alınamadı: " + JSON.stringify(appTokenData));
     }
 
     const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
@@ -159,13 +163,13 @@ app.get("/subscribe/chat", async (req, res) => {
 
     const subData = await subRes.text();
     console.log("SUBSCRIBE RESPONSE:", subData);
-
     res.send("Abonelik isteği gönderildi: " + subData);
   } catch (error) {
     console.error("SUBSCRIBE ERROR:", error);
     res.status(500).send("Subscribe hatası: " + error.message);
   }
 });
+
 app.post("/webhook/kick", async (req, res) => {
   try {
     const payload = req.body || {};
