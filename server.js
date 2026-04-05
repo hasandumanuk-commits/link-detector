@@ -567,12 +567,32 @@ app.get("/links", async (req, res) => {
   try {
     await ensureTables();
 
-    const result = await pool.query(`
-      SELECT id, message_text, extracted_links, created_at
-      FROM links
-      ORDER BY id DESC
-      LIMIT 100
-    `);
+    const search = (req.query.search || "").trim();
+
+let result;
+
+if (search) {
+  result = await pool.query(
+    `
+    SELECT id, message_text, extracted_links, created_at
+    FROM links
+    WHERE
+      CAST(id AS TEXT) ILIKE $1
+      OR COALESCE(message_text, '') ILIKE $1
+      OR COALESCE(extracted_links, '') ILIKE $1
+    ORDER BY id DESC
+    LIMIT 100
+    `,
+    [`%${search}%`]
+  );
+} else {
+  result = await pool.query(`
+    SELECT id, message_text, extracted_links, created_at
+    FROM links
+    ORDER BY id DESC
+    LIMIT 100
+  `);
+}
 
     const rows = result.rows;
 
@@ -664,6 +684,39 @@ app.get("/links", async (req, res) => {
               border-radius: 10px;
               margin-right: 10px;
             }
+            .search-form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.search-input {
+  background: #11151b;
+  border: 1px solid #232935;
+  color: white;
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 260px;
+}
+.search-btn {
+  background: #8b5cf6;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: bold;
+}
+.clear-btn {
+  display: inline-block;
+  background: #1c2431;
+  color: white !important;
+  text-decoration: none;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: bold;
+}
             .card {
               background: #181c23;
               border: 1px solid #2b3240;
@@ -751,6 +804,18 @@ app.get("/links", async (req, res) => {
                 <a href="/" target="_blank">Ana Sayfa</a>
               </div>
             </div>
+
+            <form class="search-form" method="GET" action="/links">
+  <input
+    class="search-input"
+    type="text"
+    name="search"
+    placeholder="ID, mesaj veya link ara"
+    value="${escapeHtml(search)}"
+  />
+  <button class="search-btn" type="submit">Ara</button>
+  <a class="clear-btn" href="/links">Temizle</a>
+</form>
 
             ${
               rows.length > 0
