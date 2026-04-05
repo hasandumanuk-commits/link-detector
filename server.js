@@ -465,6 +465,20 @@ app.post("/webhook/kick", async (req, res) => {
   }
 });
 
+app.post("/links/delete/:id", async (req, res) => {
+  try {
+    await ensureTables();
+
+    const id = req.params.id;
+
+    await pool.query(`DELETE FROM links WHERE id = $1`, [id]);
+
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Silme hatası: " + error.message);
+  }
+});
+
 app.get("/links/raw/:id", async (req, res) => {
   try {
     await ensureTables();
@@ -596,9 +610,12 @@ app.get("/links", async (req, res) => {
             <div class="section">
               <div class="label">Bulunan Linkler</div>
               <div class="text">${linksHtml}</div>
-            </div>
-            <div class="section">
+            <div class="section action-row">
   <a href="/links/raw/${row.id}" class="raw-btn">Ham Veriyi Gör</a>
+
+  <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
+    <button type="submit" class="delete-btn">Sil</button>
+  </form>
 </div>
           </div>
         `;
@@ -691,6 +708,23 @@ app.get("/links", async (req, res) => {
               color: #9ca3af;
             }
             .raw-btn {
+.delete-btn {
+  display: inline-block;
+  background: #dc2626;
+  color: white !important;
+  text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: bold;
+  border: none;
+  cursor: pointer;
+}
+.action-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
   display: inline-block;
   background: #8b5cf6;
   color: white !important;
