@@ -3,15 +3,32 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const session = require("express-session");
 
 const app = express();
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(
+  session({
+    secret: SESSION_SECRET || "default_secret_change_me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false
+    }
+  })
+);
 
 const APP_URL = process.env.APP_URL;
 const DATABASE_URL = process.env.DATABASE_URL;
 const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
 const KICK_CLIENT_SECRET = process.env.KICK_CLIENT_SECRET;
 const KICK_CHANNEL_SLUG = process.env.KICK_CHANNEL_SLUG;
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const SESSION_SECRET = process.env.SESSION_SECRET;
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -21,6 +38,13 @@ const pool = new Pool({
 });
 
 let pkceVerifier = null;
+function requireAuth(req, res, next) {
+  if (req.session && req.session.isAuthenticated) {
+    return next();
+  }
+
+  return res.redirect("/login");
+}
 
 function base64url(buffer) {
   return buffer
@@ -97,7 +121,117 @@ async function getAppAccessToken() {
   return tokenData.access_token;
 }
 
-app.get("/", (req, res) => {
+app.get("/login", (req, res) => {
+  if (req.session && req.session.isAuthenticated) {
+    return res.redirect("/links");
+  }
+
+  const error = req.query.error ? "Kullanıcı adı veya şifre yanlış." : "";
+
+  res.send(`
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Giriş Yap</title>
+        <style>
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, sans-serif;
+            background:
+              radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
+              radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
+              linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
+            color: white;
+          }
+          .card {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(8, 16, 28, 0.94);
+            border: 1px solid rgba(72, 91, 122, 0.28);
+            border-radius: 22px;
+            padding: 28px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+          }
+          h1 {
+            margin: 0 0 8px 0;
+            font-size: 30px;
+          }
+          .sub {
+            color: #b7c5e0;
+            margin-bottom: 22px;
+          }
+          .input {
+            width: 100%;
+            background: #07111c;
+            border: 1px solid rgba(73, 95, 130, 0.35);
+            border-radius: 14px;
+            padding: 14px;
+            color: white;
+            margin-bottom: 12px;
+            outline: none;
+          }
+          .btn {
+            width: 100%;
+            border: none;
+            border-radius: 14px;
+            padding: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            background: linear-gradient(135deg, #ffd84d, #facc15);
+            color: #0b1b44;
+          }
+          .error {
+            background: rgba(220, 38, 38, 0.12);
+            border: 1px solid rgba(220, 38, 38, 0.32);
+            color: #ffb4b4;
+            padding: 12px;
+            border-radius: 12px;
+            margin-bottom: 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <form class="card" method="POST" action="/login">
+          <h1>HasanD Link Detector</h1>
+          <div class="sub">Panele girmek için giriş yap.</div>
+          ${error ? `<div class="error">${error}</div>` : ""}
+          <input class="input" type="text" name="username" placeholder="Kullanıcı adı" required />
+          <input class="input" type="password" name="password" placeholder="Şifre" required />
+          <button class="btn" type="submit">Giriş Yap</button>
+        </form>
+      </body>
+    </html>
+  `);
+});
+
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    req.session.isAuthenticated = true;
+    return res.redirect("/links");
+  }
+
+  return res.redirect("/login?error=1");
+});
+
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    req.session.isAuthenticated = true;
+    return res.redirect("/links");
+  }
+
+  return res.redirect("/login?error=1");
+});
+
+app.get("/", requireAuth, (req, res) => {
   res.send(`
     <html>
       <head>
@@ -348,7 +482,7 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-app.get("/find/broadcaster", async (req, res) => {
+app.get("/find/broadcaster", requireAuth, async (req, res) => {
   try {
     if (!KICK_CHANNEL_SLUG) {
       return res.status(400).send("KICK_CHANNEL_SLUG env değişkeni yok");
@@ -375,7 +509,7 @@ app.get("/find/broadcaster", async (req, res) => {
   }
 });
 
-app.post("/links/delete/:id", async (req, res) => {
+app.post("/links/delete/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
@@ -389,7 +523,7 @@ app.post("/links/delete/:id", async (req, res) => {
   }
 });
 
-app.get("/links/raw/:id", async (req, res) => {
+app.get("/links/raw/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
@@ -473,7 +607,7 @@ app.get("/links/raw/:id", async (req, res) => {
   }
 });
 
-app.get("/links/json", async (req, res) => {
+app.get("/links/json", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
@@ -491,7 +625,7 @@ app.get("/links/json", async (req, res) => {
   }
 });
 
-app.get("/subscribe/chat", async (req, res) => {
+app.get("/subscribe/chat", requireAuth, async (req, res) => {
   try {
     const accessToken = await getAppAccessToken();
 
@@ -579,7 +713,7 @@ app.listen(PORT, async () => {
   }
 });
 
-app.get("/links", async (req, res) => {
+app.get("/links", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
@@ -1153,7 +1287,7 @@ app.get("/links", async (req, res) => {
                     </div>
                     <a class="top-btn green" href="/health">Bağlı</a>
                     <a class="top-btn" href="/links">Yenile</a>
-                    <a class="top-btn" href="/links/json" target="_blank">Çıktı</a>
+                    <a class="top-btn" href="/logout">Çıkış</a>
                   </div>
                 </div>
 
