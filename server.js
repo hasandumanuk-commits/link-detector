@@ -581,6 +581,8 @@ if (search) {
   `);
 }
 
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links`);
+const totalCount = countResult.rows[0].total;
     const rows = result.rows;
 
     const cards = rows
@@ -784,7 +786,7 @@ if (search) {
             <div class="header">
               <div>
                 <div class="title">Link Detector Panel</div>
-                <div class="sub">Son 100 kayıt burada görünür.</div>
+                <div class="sub">Toplam kayıt: ${totalCount} | Son 100 kayıt burada görünür.</div>
               </div>
               <div class="actions">
                 <a href="/links/json" target="_blank">JSON Gör</a>
