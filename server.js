@@ -465,7 +465,89 @@ app.post("/webhook/kick", async (req, res) => {
   }
 });
 
+app.get("/links/raw/:id", async (req, res) => {
+  try {
+    await ensureTables();
 
+    const id = req.params.id;
+
+    const result = await pool.query(
+      `SELECT id, raw_data, created_at FROM links WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).send("Kayıt bulunamadı");
+    }
+
+    const row = result.rows[0];
+
+    res.send(`
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Ham Veri #${row.id}</title>
+          <style>
+            body {
+              margin: 0;
+              font-family: Arial, sans-serif;
+              background: #0f1115;
+              color: white;
+              padding: 24px;
+            }
+            .wrap {
+              max-width: 1000px;
+              margin: 0 auto;
+            }
+            .top {
+              margin-bottom: 20px;
+            }
+            .btn {
+              display: inline-block;
+              background: #8b5cf6;
+              color: white;
+              text-decoration: none;
+              padding: 10px 14px;
+              border-radius: 10px;
+              margin-right: 10px;
+            }
+            .card {
+              background: #181c23;
+              border: 1px solid #2b3240;
+              border-radius: 14px;
+              padding: 18px;
+            }
+            pre {
+              white-space: pre-wrap;
+              word-break: break-word;
+              background: #11151b;
+              border: 1px solid #232935;
+              border-radius: 10px;
+              padding: 14px;
+              line-height: 1.6;
+              overflow-x: auto;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="top">
+              <a class="btn" href="/links">Panele Dön</a>
+              <a class="btn" href="/">Ana Sayfa</a>
+            </div>
+            <div class="card">
+              <h2>Kayıt #${row.id}</h2>
+              <p>Tarih: ${new Date(row.created_at).toLocaleString("tr-TR")}</p>
+              <pre>${escapeHtml(row.raw_data)}</pre>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    res.status(500).send("Ham veri hatası: " + error.message);
+  }
+});
 
 app.get("/links", async (req, res) => {
   try {
