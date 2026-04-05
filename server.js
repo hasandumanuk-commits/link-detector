@@ -597,6 +597,9 @@ app.get("/links", async (req, res) => {
               <div class="label">Bulunan Linkler</div>
               <div class="text">${linksHtml}</div>
             </div>
+            <div class="section">
+  <a href="/links/raw/${row.id}" class="raw-btn">Ham Veriyi Gör</a>
+</div>
           </div>
         `;
       })
@@ -687,6 +690,16 @@ app.get("/links", async (req, res) => {
               padding: 24px;
               color: #9ca3af;
             }
+            .raw-btn {
+  display: inline-block;
+  background: #8b5cf6;
+  color: white !important;
+  text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: bold;
+}
             a {
               color: #a78bfa;
             }
