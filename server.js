@@ -103,47 +103,178 @@ app.get("/", (req, res) => {
         <meta charset="utf-8" />
         <title>Link Detector</title>
         <style>
+          * {
+            box-sizing: border-box;
+          }
           body {
+            margin: 0;
             font-family: Arial, sans-serif;
-            background: #0f1115;
+            background: linear-gradient(180deg, #0b0f17 0%, #111827 100%);
             color: white;
-            padding: 30px;
           }
-          a {
-            color: #8b5cf6;
-            text-decoration: none;
+          .wrap {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 40px 24px;
           }
-          .box {
-            background: #181c23;
-            border: 1px solid #2b3240;
-            border-radius: 12px;
-            padding: 20px;
-            max-width: 700px;
+          .hero {
+            background: #151b24;
+            border: 1px solid #2a3240;
+            border-radius: 20px;
+            padding: 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+          }
+          .badge {
+            display: inline-block;
+            background: rgba(139, 92, 246, 0.15);
+            color: #c4b5fd;
+            border: 1px solid rgba(139, 92, 246, 0.35);
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            letter-spacing: 0.5px;
           }
           h1 {
-            margin-top: 0;
+            margin: 0 0 12px 0;
+            font-size: 38px;
           }
-          ul {
+          .desc {
+            color: #aab3c2;
+            font-size: 16px;
+            line-height: 1.7;
+            max-width: 760px;
+          }
+          .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-top: 28px;
+          }
+          .card {
+            background: #11161f;
+            border: 1px solid #273142;
+            border-radius: 16px;
+            padding: 18px;
+          }
+          .card-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+          }
+          .card-text {
+            color: #9ca3af;
+            line-height: 1.6;
+            font-size: 14px;
+            min-height: 66px;
+          }
+          .btn {
+            display: inline-block;
+            margin-top: 14px;
+            background: #8b5cf6;
+            color: white;
+            text-decoration: none;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: bold;
+          }
+          .btn.secondary {
+            background: #1c2431;
+            border: 1px solid #334155;
+          }
+          .footer-box {
+            background: #151b24;
+            border: 1px solid #2a3240;
+            border-radius: 18px;
+            padding: 24px;
+          }
+          .footer-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 10px;
+          }
+          .footer-text {
+            color: #9ca3af;
+            line-height: 1.7;
+          }
+          .list {
+            margin: 14px 0 0 0;
+            padding-left: 18px;
+            color: #cbd5e1;
             line-height: 1.9;
+          }
+          a {
+            color: inherit;
           }
         </style>
       </head>
       <body>
-        <div class="box">
-          <h1>Link Detector çalışıyor</h1>
-          <ul>
-            <li><a href="/health">/health</a></li>
-            <li><a href="/links">/links</a></li>
-            <li><a href="/links/json">/links/json</a></li>
-            <li><a href="/find/broadcaster">/find/broadcaster</a></li>
-            <li><a href="/subscribe/chat">/subscribe/chat</a></li>
-            <li><a href="/auth/kick">/auth/kick</a></li>
-          </ul>
+        <div class="wrap">
+          <div class="hero">
+            <div class="badge">LINK DETECTOR DASHBOARD</div>
+            <h1>Link Detector</h1>
+            <div class="desc">
+              Kick chat üzerinden gelen linkleri yakalamak, saklamak ve panelde göstermek için hazırlanan yönetim ekranı.
+              Şu an panel ve veritabanı tarafı çalışıyor. Webhook abonelik kısmı daha sonra netleştirilecek.
+            </div>
+
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">Panel</div>
+                <div class="card-text">
+                  Veritabanına düşen kayıtları kart görünümünde açar.
+                </div>
+                <a class="btn" href="/links">Panele Git</a>
+              </div>
+
+              <div class="card">
+                <div class="card-title">JSON Verisi</div>
+                <div class="card-text">
+                  Ham kayıtları JSON olarak gösterir. Teknik kontrol için iyi.
+                </div>
+                <a class="btn secondary" href="/links/json">JSON Aç</a>
+              </div>
+
+              <div class="card">
+                <div class="card-title">Sağlık Kontrolü</div>
+                <div class="card-text">
+                  Servisin ayakta olup olmadığını kontrol eder.
+                </div>
+                <a class="btn secondary" href="/health">Health Aç</a>
+              </div>
+
+              <div class="card">
+                <div class="card-title">Broadcaster Kontrolü</div>
+                <div class="card-text">
+                  Kick kanal slug bilgisinden broadcaster user id bilgisini çeker.
+                </div>
+                <a class="btn secondary" href="/find/broadcaster">Kontrol Et</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="footer-box">
+            <div class="footer-title">Şu an çalışan parçalar</div>
+            <div class="footer-text">
+              Aşağıdaki kısımlar hazır durumda:
+            </div>
+            <ul class="list">
+              <li>Render deploy çalışıyor</li>
+              <li>Postgres bağlantısı çalışıyor</li>
+              <li>Link kayıt paneli çalışıyor</li>
+              <li>JSON listeleme çalışıyor</li>
+              <li>OAuth temel akışı çalışıyor</li>
+            </ul>
+          </div>
         </div>
       </body>
     </html>
   `);
 });
+  
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
