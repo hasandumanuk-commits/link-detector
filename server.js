@@ -564,11 +564,27 @@ app.post("/webhook/kick", async (req, res) => {
   }
 });
 
+
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, async () => {
+  console.log(`Server ${PORT} portunda çalışıyor`);
+
+  try {
+    await ensureTables();
+    console.log("Tablolar hazır");
+  } catch (err) {
+    console.error("DB tablo oluşturma hatası:", err);
+  }
+});
+
 app.get("/links", async (req, res) => {
   try {
     await ensureTables();
 
-    const search = (req.query.search || "").trim();
+    const rawSearch = req.query.search;
+    const search = typeof rawSearch === "string" ? rawSearch.trim() : "";
 
     let result;
 
@@ -658,7 +674,6 @@ app.get("/links", async (req, res) => {
 
             <div class="feed-actions">
               <a href="/links/raw/${row.id}" class="icon-btn" title="Ham Veriyi Gör">↗</a>
-
               <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
                 <button type="submit" class="icon-btn danger" title="Sil">✕</button>
               </form>
@@ -672,19 +687,19 @@ app.get("/links", async (req, res) => {
       <html>
         <head>
           <meta charset="utf-8" />
-          <title>Link Detector Panel</title>
+          <title>HasanD Link Detector</title>
           <style>
             * { box-sizing: border-box; }
 
             body {
-  margin: 0;
-  font-family: Arial, sans-serif;
-  color: #f5f7fb;
-  background:
-    radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
-    radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
-    linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
-}
+              margin: 0;
+              font-family: Arial, sans-serif;
+              color: #f5f7fb;
+              background:
+                radial-gradient(circle at top left, rgba(255, 230, 80, 0.10), transparent 28%),
+                radial-gradient(circle at top right, rgba(16, 42, 110, 0.22), transparent 30%),
+                linear-gradient(180deg, #08152f 0%, #041126 55%, #020814 100%);
+            }
 
             a {
               color: inherit;
@@ -712,17 +727,17 @@ app.get("/links", async (req, res) => {
             }
 
             .side-logo {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #ffd84d, #1d4ed8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
-  color: #041126;
-  box-shadow: 0 0 18px rgba(255, 216, 77, 0.28);
-}
+              width: 42px;
+              height: 42px;
+              border-radius: 14px;
+              background: linear-gradient(135deg, #ffd84d, #1d4ed8);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-weight: bold;
+              color: #041126;
+              box-shadow: 0 0 18px rgba(255, 216, 77, 0.28);
+            }
 
             .side-btn {
               width: 42px;
@@ -738,10 +753,10 @@ app.get("/links", async (req, res) => {
             }
 
             .side-btn.active {
-  background: linear-gradient(135deg, #ffd84d, #facc15);
-  color: #0b1b44;
-  font-weight: bold;
-}
+              background: linear-gradient(135deg, #ffd84d, #facc15);
+              color: #0b1b44;
+              font-weight: bold;
+            }
 
             .content {
               flex: 1;
@@ -774,7 +789,7 @@ app.get("/links", async (req, res) => {
             }
 
             .brand-sub {
-              color: #7b8aa8;
+              color: #c8d4ef;
               font-size: 12px;
             }
 
@@ -813,14 +828,13 @@ app.get("/links", async (req, res) => {
               border-radius: 14px;
               padding: 10px 14px;
               font-weight: 700;
-              cursor: pointer;
             }
 
             .top-btn.green {
-  background: linear-gradient(135deg, #0dcf83, #0d9b75);
-  color: #04150f;
-  border: none;
-}
+              background: linear-gradient(135deg, #ffd84d, #facc15);
+              color: #0b1b44;
+              border: none;
+            }
 
             .search-panel,
             .filter-panel,
@@ -876,7 +890,7 @@ app.get("/links", async (req, res) => {
             }
 
             .search-btn {
-              background: #8b5cf6;
+              background: #6d28d9;
               color: white;
             }
 
@@ -899,6 +913,7 @@ app.get("/links", async (req, res) => {
               border: 1px solid rgba(73, 95, 130, 0.35);
               font-size: 12px;
               color: #b6c4df;
+              display: inline-block;
             }
 
             .chip.green { color: #79f0b6; border-color: rgba(13, 207, 131, 0.35); }
@@ -941,10 +956,6 @@ app.get("/links", async (req, res) => {
             .dot-3 { color: #f97316; background: #f97316; }
             .dot-4 { color: #ec4899; background: #ec4899; }
 
-            .time-block {
-              min-width: 0;
-            }
-
             .time {
               font-size: 12px;
               color: #dbe6fa;
@@ -955,10 +966,6 @@ app.get("/links", async (req, res) => {
             .subtime {
               font-size: 11px;
               color: #74839f;
-            }
-
-            .feed-main {
-              min-width: 0;
             }
 
             .user-row {
@@ -975,14 +982,14 @@ app.get("/links", async (req, res) => {
             }
 
             .user-badge {
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: rgba(255, 216, 77, 0.12);
-  border: 1px solid rgba(255, 216, 77, 0.32);
-  color: #ffe27a;
-  font-size: 11px;
-  font-weight: 700;
-}
+              padding: 5px 9px;
+              border-radius: 999px;
+              background: rgba(255, 216, 77, 0.12);
+              border: 1px solid rgba(255, 216, 77, 0.32);
+              color: #ffe27a;
+              font-size: 11px;
+              font-weight: 700;
+            }
 
             .message-line {
               color: #e9f1ff;
@@ -1123,11 +1130,11 @@ app.get("/links", async (req, res) => {
         <body>
           <div class="app-shell">
             <div class="sidebar">
-              <div class="side-logo">K</div>
-              <div class="side-btn active">≡</div>
+              <a class="side-logo" href="/links">K</a>
+              <a class="side-btn active" href="/links">≡</a>
               <a class="side-btn" href="/">⌂</a>
               <a class="side-btn" href="/links">⎘</a>
-              <a class="side-btn" href="/links/json">J</a>
+              <a class="side-btn" href="/links/json" target="_blank">J</a>
               <a class="side-btn" href="/health">H</a>
             </div>
 
@@ -1144,7 +1151,7 @@ app.get("/links", async (req, res) => {
                       <div class="stat-label">Toplam Link</div>
                       <div class="stat-value">${totalCount}</div>
                     </div>
-                    <a class="top-btn green" href="/">Bağlı</a>
+                    <a class="top-btn green" href="/health">Bağlı</a>
                     <a class="top-btn" href="/links">Yenile</a>
                     <a class="top-btn" href="/links/json" target="_blank">Çıktı</a>
                   </div>
@@ -1169,12 +1176,12 @@ app.get("/links", async (req, res) => {
 
                 <div class="filter-panel">
                   <div class="chip-row">
-  <div class="chip">Tüm Linkler</div>
-  <div class="chip blue">#fenerbahçe</div>
-  <div class="chip green">#futbol</div>
-  <div class="chip blue">#haber</div>
-  <div class="chip orange">#yemek</div>
-</div>
+                    <a class="chip" href="/links">Tüm Linkler</a>
+                    <a class="chip blue" href="/links?search=fenerbahçe">#fenerbahçe</a>
+                    <a class="chip green" href="/links?search=futbol">#futbol</a>
+                    <a class="chip blue" href="/links?search=haber">#haber</a>
+                    <a class="chip orange" href="/links?search=yemek">#yemek</a>
+                  </div>
                 </div>
 
                 ${
@@ -1189,7 +1196,7 @@ app.get("/links", async (req, res) => {
                   <div class="right-title">Paneller</div>
                   <div class="panel-buttons">
                     <a class="mini-panel-btn" href="/links">Liste</a>
-                    <a class="mini-panel-btn" href="/links/json">JSON</a>
+                    <a class="mini-panel-btn" href="/links/json" target="_blank">JSON</a>
                     <a class="mini-panel-btn" href="/health">Health</a>
                     <a class="mini-panel-btn" href="/find/broadcaster">Kick</a>
                   </div>
@@ -1198,9 +1205,9 @@ app.get("/links", async (req, res) => {
                 <div class="right-card">
                   <div class="right-title">Durum</div>
                   <div class="chip-row">
-                    <div class="chip green">Render Aktif</div>
-                    <div class="chip blue">DB Bağlı</div>
-                    <div class="chip pink">Webhook Bekliyor</div>
+                    <a class="chip green" href="/health">Render Aktif</a>
+                    <a class="chip blue" href="/links/json" target="_blank">DB Bağlı</a>
+                    <a class="chip pink" href="/subscribe/chat">Webhook Bekliyor</a>
                   </div>
                 </div>
               </div>
@@ -1212,18 +1219,5 @@ app.get("/links", async (req, res) => {
   } catch (error) {
     console.error("LINKS PAGE ERROR:", error);
     res.status(500).send("Links sayfası hatası: " + error.message);
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, async () => {
-  console.log(`Server ${PORT} portunda çalışıyor`);
-
-  try {
-    await ensureTables();
-    console.log("Tablolar hazır");
-  } catch (err) {
-    console.error("DB tablo oluşturma hatası:", err);
   }
 });
