@@ -78,33 +78,18 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function getDomain(link) {
-  try {
-    const url = new URL(link);
-    return url.hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-
-function detectRisk(links, messageText = "") {
-  const text = `${messageText} ${Array.isArray(links) ? links.join(" ") : ""}`.toLowerCase();
-
-  const shorteners = ["bit.ly", "tinyurl", "t.co", "goo.gl", "cutt.ly", "shorturl"];
-  const invites = ["discord.gg", "discord.com/invite", "t.me", "telegram.me", "wa.me"];
-  const adultish = ["onlyfans", "porn", "xxx", "escort", "nsfw", "18+"];
-  const suspicious = ["free skin", "nitro", "gift", "airdrop", "casino", "bet", "hack", "crack"];
-
-  if (adultish.some((k) => text.includes(k))) return "Yüksek Risk";
-  if (shorteners.some((k) => text.includes(k))) return "Şüpheli";
-  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
-  if (invites.some((k) => text.includes(k))) return "Davet Linki";
-  return "Normal";
-}
-
 function csvEscape(value) {
   const s = String(value ?? "");
   return `"${s.replace(/"/g, '""')}"`;
+}
+
+function getDomain(link) {
+  try {
+    const url = new URL(link);
+    return url.hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 async function ensureTables() {
@@ -127,6 +112,33 @@ async function ensureTables() {
       review_status TEXT DEFAULT 'Beklemede',
       moderator_note TEXT,
       is_deleted BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whitelist_domains (
+      id SERIAL PRIMARY KEY,
+      domain TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS blacklist_domains (
+      id SERIAL PRIMARY KEY,
+      domain TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id SERIAL PRIMARY KEY,
+      action_type TEXT NOT NULL,
+      target_id INTEGER,
+      details TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -138,6 +150,48 @@ async function ensureTables() {
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'Beklemede'`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS moderator_note TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+}
+
+async function logAudit(actionType, targetId = null, details = "") {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (action_type, target_id, details) VALUES ($1, $2, $3)`,
+      [actionType, targetId, details]
+    );
+  } catch (error) {
+    console.error("AUDIT LOG ERROR:", error);
+  }
+}
+
+async function getWhitelistDomains() {
+  const result = await pool.query(`SELECT domain FROM whitelist_domains ORDER BY domain ASC`);
+  return result.rows.map((r) => String(r.domain).toLowerCase());
+}
+
+async function getBlacklistDomains() {
+  const result = await pool.query(`SELECT domain FROM blacklist_domains ORDER BY domain ASC`);
+  return result.rows.map((r) => String(r.domain).toLowerCase());
+}
+
+function detectRisk(links, messageText = "", whitelist = [], blacklist = []) {
+  const domains = (Array.isArray(links) ? links : []).map(getDomain).filter(Boolean);
+  const text = `${messageText} ${(Array.isArray(links) ? links.join(" ") : "")}`.toLowerCase();
+
+  if (domains.some((d) => blacklist.includes(d))) return "Yüksek Risk";
+  if (domains.some((d) => whitelist.includes(d))) return "Whitelist";
+
+  const shorteners = ["bit.ly", "tinyurl", "t.co", "goo.gl", "cutt.ly", "shorturl"];
+  const invites = ["discord.gg", "discord.com", "t.me", "telegram.me", "wa.me"];
+  const adultish = ["onlyfans", "porn", "xxx", "escort", "nsfw", "18+"];
+  const suspicious = ["free skin", "nitro", "gift", "airdrop", "casino", "bet", "hack", "crack"];
+
+  if (adultish.some((k) => text.includes(k))) return "Yüksek Risk";
+  if (domains.some((d) => shorteners.some((s) => d.includes(s)))) return "Şüpheli";
+  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
+  if (domains.some((d) => invites.some((s) => d.includes(s)))) return "Davet Linki";
+
+  return "Normal";
 }
 
 async function getAppAccessToken() {
@@ -191,7 +245,7 @@ app.get("/login", (req, res) => {
           }
           .card {
             width: 100%;
-            max-width: 420px;
+            max-width: 430px;
             background: rgba(8, 16, 28, 0.94);
             border: 1px solid rgba(72, 91, 122, 0.28);
             border-radius: 22px;
@@ -244,18 +298,21 @@ app.get("/login", (req, res) => {
   `);
 });
 
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     req.session.isAuthenticated = true;
+    await logAudit("LOGIN_SUCCESS", null, `username=${username}`);
     return res.redirect("/links");
   }
 
+  await logAudit("LOGIN_FAIL", null, `username=${username || ""}`);
   return res.redirect("/login?error=1");
 });
 
-app.get("/logout", (req, res) => {
+app.get("/logout", requireAuth, async (req, res) => {
+  await logAudit("LOGOUT", null, "logout");
   req.session.destroy(() => {
     res.redirect("/login");
   });
@@ -266,7 +323,7 @@ app.get("/", requireAuth, (req, res) => {
     <html>
       <head>
         <meta charset="utf-8" />
-        <title>Link Detector</title>
+        <title>HasanD Link Detector</title>
         <style>
           * { box-sizing: border-box; }
           body {
@@ -349,7 +406,7 @@ app.get("/", requireAuth, (req, res) => {
             <div class="badge">HASAND LINK DETECTOR</div>
             <h1>Kontrol Merkezi</h1>
             <div class="desc">
-              Link kayıtları, risk etiketleri, moderasyon notları ve export araçları burada.
+              Link kayıtları, risk etiketleri, moderasyon notları, export araçları ve domain listeleri burada.
             </div>
 
             <div class="grid">
@@ -390,6 +447,7 @@ app.get("/", requireAuth, (req, res) => {
               <li>Risk etiketi aktif</li>
               <li>Durum ve not sistemi aktif</li>
               <li>Soft delete aktif</li>
+              <li>Whitelist / blacklist aktif</li>
             </ul>
           </div>
         </div>
@@ -465,6 +523,8 @@ app.get("/callback", requireAuth, async (req, res) => {
       `INSERT INTO oauth_tokens (raw_data) VALUES ($1)`,
       [JSON.stringify(tokenData)]
     );
+
+    await logAudit("KICK_CALLBACK", null, "token kaydedildi");
 
     res.send("Kick yetkilendirme tamamlandı. Token kaydedildi.");
   } catch (error) {
@@ -551,9 +611,12 @@ app.post("/webhook/kick", async (req, res) => {
 
     const links = extractLinks(possibleText);
     const firstDomain = links.length ? getDomain(links[0]) : "";
-    const riskLevel = detectRisk(links, possibleText);
 
     await ensureTables();
+
+    const whitelist = await getWhitelistDomains();
+    const blacklist = await getBlacklistDomains();
+    const riskLevel = detectRisk(links, possibleText, whitelist, blacklist);
 
     await pool.query(
       `
@@ -565,9 +628,10 @@ app.post("/webhook/kick", async (req, res) => {
         risk_level,
         review_status,
         moderator_note,
-        is_deleted
+        is_deleted,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
       `,
       [
         possibleText || null,
@@ -581,6 +645,8 @@ app.post("/webhook/kick", async (req, res) => {
       ]
     );
 
+    await logAudit("WEBHOOK_INSERT", null, `domain=${firstDomain || ""} risk=${riskLevel}`);
+
     res.status(200).json({ success: true, found_links: links });
   } catch (error) {
     console.error("WEBHOOK ERROR:", error);
@@ -592,7 +658,11 @@ app.post("/links/delete/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
     const id = req.params.id;
-    await pool.query(`UPDATE links SET is_deleted = TRUE WHERE id = $1`, [id]);
+    await pool.query(
+      `UPDATE links SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+    await logAudit("SOFT_DELETE", Number(id), "çöpe taşındı");
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Silme hatası: " + error.message);
@@ -603,7 +673,11 @@ app.post("/links/restore/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
     const id = req.params.id;
-    await pool.query(`UPDATE links SET is_deleted = FALSE WHERE id = $1`, [id]);
+    await pool.query(
+      `UPDATE links SET is_deleted = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+    await logAudit("RESTORE", Number(id), "geri alındı");
     res.redirect("/links?deleted=1");
   } catch (error) {
     res.status(500).send("Geri alma hatası: " + error.message);
@@ -617,7 +691,12 @@ app.post("/links/status/:id", requireAuth, async (req, res) => {
     const allowed = ["Onaylandı", "Reddedildi", "Beklemede"];
     const status = allowed.includes(req.body.status) ? req.body.status : "Beklemede";
 
-    await pool.query(`UPDATE links SET review_status = $1 WHERE id = $2`, [status, id]);
+    await pool.query(
+      `UPDATE links SET review_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [status, id]
+    );
+
+    await logAudit("STATUS_UPDATE", Number(id), `status=${status}`);
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Durum güncelleme hatası: " + error.message);
@@ -630,10 +709,121 @@ app.post("/links/note/:id", requireAuth, async (req, res) => {
     const id = req.params.id;
     const note = (req.body.note || "").trim().slice(0, 500);
 
-    await pool.query(`UPDATE links SET moderator_note = $1 WHERE id = $2`, [note || null, id]);
+    await pool.query(
+      `UPDATE links SET moderator_note = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [note || null, id]
+    );
+
+    await logAudit("NOTE_UPDATE", Number(id), note || "");
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Not kaydetme hatası: " + error.message);
+  }
+});
+
+app.post("/links/bulk-action", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const ids = Array.isArray(req.body.ids)
+      ? req.body.ids
+      : req.body.ids
+      ? [req.body.ids]
+      : [];
+
+    const action = req.body.action;
+
+    if (!ids.length) {
+      return res.redirect("/links");
+    }
+
+    const numericIds = ids.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+
+    if (!numericIds.length) {
+      return res.redirect("/links");
+    }
+
+    if (action === "approve") {
+      await pool.query(
+        `UPDATE links SET review_status = 'Onaylandı', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_APPROVE", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "reject") {
+      await pool.query(
+        `UPDATE links SET review_status = 'Reddedildi', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_REJECT", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "delete") {
+      await pool.query(
+        `UPDATE links SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_DELETE", null, `ids=${numericIds.join(",")}`);
+    }
+
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Toplu işlem hatası: " + error.message);
+  }
+});
+
+app.post("/domains/whitelist", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+    const domain = String(req.body.domain || "").trim().toLowerCase().replace(/^www\./, "");
+    if (!domain) return res.redirect("/links");
+
+    await pool.query(
+      `INSERT INTO whitelist_domains (domain) VALUES ($1) ON CONFLICT (domain) DO NOTHING`,
+      [domain]
+    );
+
+    await logAudit("WHITELIST_ADD", null, domain);
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Whitelist ekleme hatası: " + error.message);
+  }
+});
+
+app.post("/domains/blacklist", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+    const domain = String(req.body.domain || "").trim().toLowerCase().replace(/^www\./, "");
+    if (!domain) return res.redirect("/links");
+
+    await pool.query(
+      `INSERT INTO blacklist_domains (domain) VALUES ($1) ON CONFLICT (domain) DO NOTHING`,
+      [domain]
+    );
+
+    await logAudit("BLACKLIST_ADD", null, domain);
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Blacklist ekleme hatası: " + error.message);
+  }
+});
+
+app.post("/domains/whitelist/delete/:id", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    await pool.query(`DELETE FROM whitelist_domains WHERE id = $1`, [id]);
+    await logAudit("WHITELIST_DELETE", Number(id), "silindi");
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Whitelist silme hatası: " + error.message);
+  }
+});
+
+app.post("/domains/blacklist/delete/:id", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    await pool.query(`DELETE FROM blacklist_domains WHERE id = $1`, [id]);
+    await logAudit("BLACKLIST_DELETE", Number(id), "silindi");
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Blacklist silme hatası: " + error.message);
   }
 });
 
@@ -721,10 +911,10 @@ app.get("/links/json", requireAuth, async (req, res) => {
     await ensureTables();
 
     const result = await pool.query(`
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at
+      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
       FROM links
       ORDER BY id DESC
-      LIMIT 200
+      LIMIT 500
     `);
 
     res.json(result.rows);
@@ -738,7 +928,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
     await ensureTables();
 
     const result = await pool.query(`
-      SELECT id, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at
+      SELECT id, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
       FROM links
       ORDER BY id DESC
       LIMIT 1000
@@ -754,6 +944,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
       "moderator_note",
       "is_deleted",
       "created_at",
+      "updated_at",
     ].join(",");
 
     const rows = result.rows.map((row) =>
@@ -767,6 +958,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
         csvEscape(row.moderator_note),
         csvEscape(row.is_deleted),
         csvEscape(row.created_at),
+        csvEscape(row.updated_at),
       ].join(",")
     );
 
@@ -787,7 +979,11 @@ app.get("/links", requireAuth, async (req, res) => {
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
     const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
+    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
     const deletedFilter = req.query.deleted === "1";
+    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
+    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
+    const autoRefresh = typeof req.query.auto_refresh === "string" ? req.query.auto_refresh.trim() : "0";
 
     const whereParts = [];
     const values = [];
@@ -820,6 +1016,24 @@ app.get("/links", requireAuth, async (req, res) => {
       idx++;
     }
 
+    if (domainFilter) {
+      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
+      values.push(`%${domainFilter}%`);
+      idx++;
+    }
+
+    if (dateFrom) {
+      whereParts.push(`created_at::date >= $${idx}`);
+      values.push(dateFrom);
+      idx++;
+    }
+
+    if (dateTo) {
+      whereParts.push(`created_at::date <= $${idx}`);
+      values.push(dateTo);
+      idx++;
+    }
+
     whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
     values.push(deletedFilter);
     idx++;
@@ -828,7 +1042,7 @@ app.get("/links", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at
+      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
       FROM links
       ${whereSql}
       ORDER BY id DESC
@@ -845,7 +1059,18 @@ app.get("/links", requireAuth, async (req, res) => {
       WHERE COALESCE(is_deleted, FALSE) = FALSE
       AND created_at::date = CURRENT_DATE
     `);
-
+    const suspiciousCountResult = await pool.query(`
+      SELECT COUNT(*)::int AS total
+      FROM links
+      WHERE COALESCE(is_deleted, FALSE) = FALSE
+      AND COALESCE(risk_level, 'Normal') IN ('Şüpheli', 'Yüksek Risk', 'Davet Linki')
+    `);
+    const approvedCountResult = await pool.query(`
+      SELECT COUNT(*)::int AS total
+      FROM links
+      WHERE COALESCE(is_deleted, FALSE) = FALSE
+      AND COALESCE(review_status, 'Beklemede') = 'Onaylandı'
+    `);
     const domainStatResult = await pool.query(`
       SELECT COALESCE(link_domain, '') AS link_domain, COUNT(*)::int AS total
       FROM links
@@ -854,10 +1079,30 @@ app.get("/links", requireAuth, async (req, res) => {
       ORDER BY total DESC, link_domain ASC
       LIMIT 1
     `);
+    const recentAuditResult = await pool.query(`
+      SELECT id, action_type, target_id, details, created_at
+      FROM audit_logs
+      ORDER BY id DESC
+      LIMIT 8
+    `);
+    const whitelistResult = await pool.query(`
+      SELECT id, domain
+      FROM whitelist_domains
+      ORDER BY domain ASC
+      LIMIT 20
+    `);
+    const blacklistResult = await pool.query(`
+      SELECT id, domain
+      FROM blacklist_domains
+      ORDER BY domain ASC
+      LIMIT 20
+    `);
 
     const totalCount = totalCountResult.rows[0]?.total || 0;
     const deletedCount = deletedCountResult.rows[0]?.total || 0;
     const todayCount = todayCountResult.rows[0]?.total || 0;
+    const suspiciousCount = suspiciousCountResult.rows[0]?.total || 0;
+    const approvedCount = approvedCountResult.rows[0]?.total || 0;
     const topDomain = domainStatResult.rows[0]?.link_domain || "-";
     const rows = result.rows;
 
@@ -885,6 +1130,8 @@ app.get("/links", requireAuth, async (req, res) => {
             ? "risk-mid"
             : riskLevel === "Davet Linki"
             ? "risk-invite"
+            : riskLevel === "Whitelist"
+            ? "risk-whitelist"
             : "risk-normal";
 
         const statusClass =
@@ -897,6 +1144,7 @@ app.get("/links", requireAuth, async (req, res) => {
         return `
           <div class="feed-card">
             <div class="feed-left">
+              <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
               <div class="dot dot-${index % 5}"></div>
               <div class="time-block">
                 <div class="time">${timeText}</div>
@@ -987,10 +1235,56 @@ app.get("/links", requireAuth, async (req, res) => {
       })
       .join("");
 
+    const auditHtml = recentAuditResult.rows
+      .map((row) => {
+        return `
+          <div class="audit-item">
+            <div class="audit-top">
+              <strong>${escapeHtml(row.action_type)}</strong>
+              <span>${new Date(row.created_at).toLocaleString("tr-TR")}</span>
+            </div>
+            <div class="audit-bottom">${escapeHtml(row.details || "")}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const whitelistHtml = whitelistResult.rows
+      .map(
+        (row) => `
+        <div class="domain-item">
+          <span>${escapeHtml(row.domain)}</span>
+          <form method="POST" action="/domains/whitelist/delete/${row.id}">
+            <button type="submit" class="domain-del">Sil</button>
+          </form>
+        </div>
+      `
+      )
+      .join("");
+
+    const blacklistHtml = blacklistResult.rows
+      .map(
+        (row) => `
+        <div class="domain-item">
+          <span>${escapeHtml(row.domain)}</span>
+          <form method="POST" action="/domains/blacklist/delete/${row.id}">
+            <button type="submit" class="domain-del">Sil</button>
+          </form>
+        </div>
+      `
+      )
+      .join("");
+
+    const autoRefreshMeta =
+      autoRefresh === "30" || autoRefresh === "60"
+        ? `<meta http-equiv="refresh" content="${autoRefresh}">`
+        : "";
+
     res.send(`
       <html>
         <head>
           <meta charset="utf-8" />
+          ${autoRefreshMeta}
           <title>HasanD Link Detector</title>
           <style>
             * { box-sizing: border-box; }
@@ -1011,7 +1305,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 14px;
               padding: 14px;
             }
-
             .sidebar {
               width: 72px;
               background: rgba(8, 16, 28, 0.92);
@@ -1024,7 +1317,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 12px;
               box-shadow: 0 12px 30px rgba(0,0,0,0.28);
             }
-
             .side-logo {
               width: 42px;
               height: 42px;
@@ -1037,7 +1329,6 @@ app.get("/links", requireAuth, async (req, res) => {
               color: #041126;
               box-shadow: 0 0 18px rgba(255, 216, 77, 0.28);
             }
-
             .side-btn {
               width: 42px;
               height: 42px;
@@ -1050,7 +1341,6 @@ app.get("/links", requireAuth, async (req, res) => {
               justify-content: center;
               font-size: 15px;
             }
-
             .side-btn.active {
               background: linear-gradient(135deg, #ffd84d, #facc15);
               color: #0b1b44;
@@ -1060,11 +1350,11 @@ app.get("/links", requireAuth, async (req, res) => {
             .content {
               flex: 1;
               display: grid;
-              grid-template-columns: 1fr 270px;
+              grid-template-columns: 1fr 320px;
               gap: 14px;
             }
 
-            .topbar, .search-panel, .filter-panel, .feed-card, .right-card {
+            .topbar, .search-panel, .filter-panel, .bulk-panel, .feed-card, .right-card {
               background: rgba(8, 16, 28, 0.92);
               border: 1px solid rgba(72, 91, 122, 0.28);
               box-shadow: 0 12px 30px rgba(0,0,0,0.22);
@@ -1079,18 +1369,15 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 16px;
               margin-bottom: 14px;
             }
-
             .brand-title {
               font-size: 18px;
               font-weight: 700;
               margin-bottom: 3px;
             }
-
             .brand-sub {
               color: #c8d4ef;
               font-size: 12px;
             }
-
             .top-actions {
               display: flex;
               gap: 10px;
@@ -1098,27 +1385,23 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               justify-content: flex-end;
             }
-
             .stat-pill {
-              min-width: 108px;
+              min-width: 100px;
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
               border-radius: 16px;
               padding: 10px 14px;
               text-align: center;
             }
-
             .stat-label {
               color: #7b8aa8;
               font-size: 11px;
               margin-bottom: 3px;
             }
-
             .stat-value {
               font-size: 18px;
               font-weight: 700;
             }
-
             .top-btn {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
@@ -1127,14 +1410,13 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 14px;
               font-weight: 700;
             }
-
             .top-btn.green {
               background: linear-gradient(135deg, #ffd84d, #facc15);
               color: #0b1b44;
               border: none;
             }
 
-            .search-panel, .filter-panel, .right-card {
+            .search-panel, .filter-panel, .bulk-panel, .right-card {
               border-radius: 18px;
               padding: 14px;
               margin-bottom: 12px;
@@ -1160,32 +1442,40 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .search-input, .select, .note-input {
-              background: transparent;
-              border: none;
+              background: #07111c;
+              border: 1px solid rgba(73, 95, 130, 0.35);
               outline: none;
               color: white;
               font-size: 14px;
+              border-radius: 12px;
+              padding: 10px 12px;
+            }
+            .search-input {
+              flex: 1;
+              background: transparent;
+              border: none;
+              padding: 0;
             }
 
-            .search-input { flex: 1; }
-
-            .search-btn, .clear-btn, .mini-btn {
+            .search-btn, .clear-btn, .mini-btn, .bulk-btn, .domain-btn, .domain-del {
               border: none;
               cursor: pointer;
               border-radius: 12px;
-              padding: 12px 14px;
+              padding: 10px 12px;
               font-weight: 700;
             }
-
-            .search-btn, .mini-btn {
+            .search-btn, .mini-btn, .bulk-btn, .domain-btn {
               background: #6d28d9;
               color: white;
             }
-
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
               border: 1px solid rgba(73, 95, 130, 0.35);
+            }
+            .domain-del {
+              background: rgba(220, 38, 38, 0.16);
+              color: #ffb4b4;
             }
 
             .chip {
@@ -1196,11 +1486,17 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 12px;
               color: #b6c4df;
             }
-
             .chip.green { color: #79f0b6; border-color: rgba(13, 207, 131, 0.35); }
             .chip.pink { color: #f4a5d6; border-color: rgba(255, 95, 162, 0.35); }
             .chip.orange { color: #ffc078; border-color: rgba(255, 160, 60, 0.35); }
             .chip.blue { color: #88c7ff; border-color: rgba(72, 163, 255, 0.35); }
+
+            .bulk-panel form {
+              display: flex;
+              gap: 10px;
+              flex-wrap: wrap;
+              align-items: center;
+            }
 
             .feed-list {
               display: flex;
@@ -1212,7 +1508,7 @@ app.get("/links", requireAuth, async (req, res) => {
               border-radius: 18px;
               padding: 16px;
               display: grid;
-              grid-template-columns: 160px 1fr 70px;
+              grid-template-columns: 190px 1fr 70px;
               gap: 16px;
               align-items: start;
             }
@@ -1222,6 +1518,11 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: center;
             }
+            .bulk-checkbox {
+              width: 18px;
+              height: 18px;
+              accent-color: #facc15;
+            }
 
             .dot {
               width: 12px;
@@ -1230,7 +1531,6 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-top: 2px;
               box-shadow: 0 0 14px currentColor;
             }
-
             .dot-0 { color: #7c3aed; background: #7c3aed; }
             .dot-1 { color: #06b6d4; background: #06b6d4; }
             .dot-2 { color: #22c55e; background: #22c55e; }
@@ -1247,9 +1547,7 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               margin-bottom: 10px;
             }
-
             .user-name { font-weight: 700; font-size: 15px; }
-
             .user-badge {
               padding: 5px 9px;
               border-radius: 999px;
@@ -1272,6 +1570,7 @@ app.get("/links", requireAuth, async (req, res) => {
             .risk-mid { background: rgba(249, 115, 22, 0.12); color: #fdba74; border-color: rgba(249, 115, 22, 0.25); }
             .risk-high { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
             .risk-invite { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
+            .risk-whitelist { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.25); }
 
             .status-approved { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
             .status-rejected { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
@@ -1283,7 +1582,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 8px;
               margin-bottom: 10px;
             }
-
             .meta-chip {
               font-size: 11px;
               background: #0c1624;
@@ -1299,21 +1597,18 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 8px;
               word-break: break-word;
             }
-
             .link-line a {
               color: #74c4ff;
               font-size: 14px;
               font-weight: 700;
               word-break: break-all;
             }
-
             .extra-links {
               margin-top: 10px;
               display: flex;
               flex-wrap: wrap;
               gap: 8px;
             }
-
             .mini-link {
               font-size: 11px;
               color: #b5c6e7;
@@ -1336,15 +1631,6 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               align-items: center;
             }
-
-            .select, .note-input {
-              background: #07111c;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              border-radius: 12px;
-              padding: 10px 12px;
-              min-width: 150px;
-            }
-
             .note-input {
               flex: 1;
               min-width: 180px;
@@ -1356,7 +1642,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: flex-end;
             }
-
             .feed-actions form { margin: 0; }
 
             .icon-btn {
@@ -1372,18 +1657,14 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               cursor: pointer;
             }
-
             .icon-btn.danger {
               color: #ff9baa !important;
               border-color: rgba(220, 38, 38, 0.35);
             }
-
             .icon-btn.restore {
               color: #9ae6b4 !important;
               border-color: rgba(34, 197, 94, 0.35);
             }
-
-            .muted { color: #7d8ba6; }
 
             .empty-box {
               background: rgba(8, 16, 28, 0.92);
@@ -1399,7 +1680,6 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-direction: column;
               gap: 14px;
             }
-
             .right-card { border-radius: 18px; padding: 16px; }
             .right-title { font-size: 13px; color: #8fa0bf; margin-bottom: 12px; }
 
@@ -1408,7 +1688,6 @@ app.get("/links", requireAuth, async (req, res) => {
               grid-template-columns: repeat(2, 1fr);
               gap: 10px;
             }
-
             .mini-panel-btn {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
@@ -1419,11 +1698,48 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
             }
 
-            @media (max-width: 1100px) {
+            .domain-list, .audit-list {
+              display: flex;
+              flex-direction: column;
+              gap: 8px;
+              margin-top: 12px;
+            }
+            .domain-item, .audit-item {
+              background: #0b1421;
+              border: 1px solid rgba(73, 95, 130, 0.35);
+              border-radius: 12px;
+              padding: 10px;
+            }
+            .domain-item {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 8px;
+            }
+            .audit-top {
+              display: flex;
+              justify-content: space-between;
+              gap: 8px;
+              font-size: 12px;
+              margin-bottom: 6px;
+            }
+            .audit-bottom {
+              color: #c9d7ef;
+              font-size: 12px;
+              word-break: break-word;
+            }
+
+            @media (max-width: 1250px) {
               .content { grid-template-columns: 1fr; }
               .right { order: -1; }
             }
-
+            @media (max-width: 900px) {
+              .feed-card { grid-template-columns: 1fr; }
+              .feed-actions {
+                flex-direction: row;
+                justify-content: flex-start;
+              }
+            }
             @media (max-width: 800px) {
               .app-shell { display: block; padding: 10px; }
               .sidebar {
@@ -1431,11 +1747,6 @@ app.get("/links", requireAuth, async (req, res) => {
                 flex-direction: row;
                 justify-content: center;
                 margin-bottom: 10px;
-              }
-              .feed-card { grid-template-columns: 1fr; }
-              .feed-actions {
-                flex-direction: row;
-                justify-content: flex-start;
               }
             }
           </style>
@@ -1469,8 +1780,12 @@ app.get("/links", requireAuth, async (req, res) => {
                       <div class="stat-value">${todayCount}</div>
                     </div>
                     <div class="stat-pill">
-                      <div class="stat-label">Çöp</div>
-                      <div class="stat-value">${deletedCount}</div>
+                      <div class="stat-label">Şüpheli</div>
+                      <div class="stat-value">${suspiciousCount}</div>
+                    </div>
+                    <div class="stat-pill">
+                      <div class="stat-label">Onaylı</div>
+                      <div class="stat-value">${approvedCount}</div>
                     </div>
                     <a class="top-btn green" href="/health">Bağlı</a>
                     <a class="top-btn" href="/links">Yenile</a>
@@ -1490,6 +1805,7 @@ app.get("/links", requireAuth, async (req, res) => {
                         value="${escapeHtml(search)}"
                       />
                     </div>
+                    <input class="select" type="text" name="domain" placeholder="domain filtrele" value="${escapeHtml(domainFilter)}" />
                     <select class="select" name="status">
                       <option value="">Tüm Durumlar</option>
                       <option value="Beklemede" ${statusFilter === "Beklemede" ? "selected" : ""}>Beklemede</option>
@@ -1499,9 +1815,17 @@ app.get("/links", requireAuth, async (req, res) => {
                     <select class="select" name="risk">
                       <option value="">Tüm Riskler</option>
                       <option value="Normal" ${riskFilter === "Normal" ? "selected" : ""}>Normal</option>
+                      <option value="Whitelist" ${riskFilter === "Whitelist" ? "selected" : ""}>Whitelist</option>
                       <option value="Şüpheli" ${riskFilter === "Şüpheli" ? "selected" : ""}>Şüpheli</option>
                       <option value="Davet Linki" ${riskFilter === "Davet Linki" ? "selected" : ""}>Davet Linki</option>
                       <option value="Yüksek Risk" ${riskFilter === "Yüksek Risk" ? "selected" : ""}>Yüksek Risk</option>
+                    </select>
+                    <input class="select" type="date" name="date_from" value="${escapeHtml(dateFrom)}" />
+                    <input class="select" type="date" name="date_to" value="${escapeHtml(dateTo)}" />
+                    <select class="select" name="auto_refresh">
+                      <option value="0" ${autoRefresh === "0" ? "selected" : ""}>Oto yenileme kapalı</option>
+                      <option value="30" ${autoRefresh === "30" ? "selected" : ""}>30 sn yenile</option>
+                      <option value="60" ${autoRefresh === "60" ? "selected" : ""}>60 sn yenile</option>
                     </select>
                     <button class="search-btn" type="submit">Ara</button>
                     <a class="clear-btn" href="/links">Temizle</a>
@@ -1517,7 +1841,16 @@ app.get("/links", requireAuth, async (req, res) => {
                     <a class="chip blue" href="/links?search=haber">#haber</a>
                     <a class="chip orange" href="/links?search=yemek">#yemek</a>
                     <a class="chip pink" href="/links?risk=Şüpheli">#şüpheli</a>
+                    <a class="chip pink" href="/links?risk=Yüksek%20Risk">#yüksek-risk</a>
                   </div>
+                </div>
+
+                <div class="bulk-panel">
+                  <form id="bulkForm" method="POST" action="/links/bulk-action">
+                    <button class="bulk-btn" type="submit" name="action" value="approve">Seçilileri Onayla</button>
+                    <button class="bulk-btn" type="submit" name="action" value="reject">Seçilileri Reddet</button>
+                    <button class="bulk-btn" type="submit" name="action" value="delete">Seçilileri Çöpe Taşı</button>
+                  </form>
                 </div>
 
                 ${
@@ -1543,7 +1876,8 @@ app.get("/links", requireAuth, async (req, res) => {
                   <div class="chip-row">
                     <div class="chip green">Render Aktif</div>
                     <div class="chip blue">DB Bağlı</div>
-                    <div class="chip pink">Webhook Bekliyor</div>
+                    <a class="chip pink" href="/subscribe/chat">Webhook Bekliyor</a>
+                    <div class="chip orange">Çöp: ${deletedCount}</div>
                   </div>
                 </div>
 
@@ -1551,6 +1885,35 @@ app.get("/links", requireAuth, async (req, res) => {
                   <div class="right-title">Özet</div>
                   <div class="chip-row">
                     <div class="chip blue">En Çok Domain: ${escapeHtml(topDomain)}</div>
+                  </div>
+                </div>
+
+                <div class="right-card">
+                  <div class="right-title">Whitelist Domain</div>
+                  <form class="inline-form" method="POST" action="/domains/whitelist">
+                    <input class="note-input" type="text" name="domain" placeholder="ör: youtube.com" />
+                    <button class="domain-btn" type="submit">Ekle</button>
+                  </form>
+                  <div class="domain-list">
+                    ${whitelistHtml || `<div class="audit-item">Henüz whitelist domain yok.</div>`}
+                  </div>
+                </div>
+
+                <div class="right-card">
+                  <div class="right-title">Blacklist Domain</div>
+                  <form class="inline-form" method="POST" action="/domains/blacklist">
+                    <input class="note-input" type="text" name="domain" placeholder="ör: spam-site.com" />
+                    <button class="domain-btn" type="submit">Ekle</button>
+                  </form>
+                  <div class="domain-list">
+                    ${blacklistHtml || `<div class="audit-item">Henüz blacklist domain yok.</div>`}
+                  </div>
+                </div>
+
+                <div class="right-card">
+                  <div class="right-title">Son İşlemler</div>
+                  <div class="audit-list">
+                    ${auditHtml || `<div class="audit-item">Henüz işlem yok.</div>`}
                   </div>
                 </div>
               </div>
