@@ -123,7 +123,48 @@ app.get("/callback", async (req, res) => {
     res.status(500).send("Callback hatası: " + error.message);
   }
 });
+app.get("/subscribe/chat", async (req, res) => {
+  try {
+    const tokenResult = await pool.query(
+      `SELECT raw_data FROM oauth_tokens ORDER BY id DESC LIMIT 1`
+    );
 
+    if (!tokenResult.rows.length) {
+      return res.status(400).send("Kayıtlı token yok");
+    }
+
+    const tokenData = JSON.parse(tokenResult.rows[0].raw_data);
+    const accessToken = tokenData.access_token;
+
+    if (!accessToken) {
+      return res.status(400).send("Access token bulunamadı");
+    }
+
+    const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        events: [
+          {
+            name: "chat.message.sent",
+            version: 1
+          }
+        ]
+      })
+    });
+
+    const subData = await subRes.text();
+    console.log("SUBSCRIBE RESPONSE:", subData);
+
+    res.send("Abonelik isteği gönderildi: " + subData);
+  } catch (error) {
+    console.error("SUBSCRIBE ERROR:", error);
+    res.status(500).send("Subscribe hatası: " + error.message);
+  }
+});
 app.post("/webhook/kick", async (req, res) => {
   try {
     const payload = req.body || {};
