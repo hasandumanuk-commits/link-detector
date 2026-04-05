@@ -231,20 +231,7 @@ app.get("/subscribe/chat", async (req, res) => {
   }
 });
 
-    const subText = await subRes.text();
-    console.log("SUBSCRIBE RESPONSE:", subText);
-
-    res.send(
-      "Abonelik isteği gönderildi. broadcaster_user_id=" +
-        broadcasterUserId +
-        " | cevap=" +
-        subText
-    );
-  } catch (error) {
-    console.error("SUBSCRIBE ERROR:", error);
-    res.status(500).send("Subscribe hatası: " + error.message);
-  }
-});
+    
 
 app.post("/webhook/kick", async (req, res) => {
   try {
