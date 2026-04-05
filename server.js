@@ -293,7 +293,7 @@ app.get("/auth/kick", (req, res) => {
         response_type: "code",
         client_id: KICK_CLIENT_ID,
         redirect_uri: redirectUri,
-        scope: "user:read channel:read",
+        scope: "user:read channel:read events:subscribe",
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
         state,
