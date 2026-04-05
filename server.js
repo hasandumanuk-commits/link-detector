@@ -334,6 +334,28 @@ app.post("/webhook/kick", async (req, res) => {
   }
 });
 
+app.get("/test/add-link", async (req, res) => {
+  try {
+    await ensureTables();
+
+    const testMessage = "Test mesajı https://google.com ve https://kick.com";
+    const testLinks = ["https://google.com", "https://kick.com"];
+
+    await pool.query(
+      `INSERT INTO links (message_text, extracted_links, raw_data) VALUES ($1, $2, $3)`,
+      [
+        testMessage,
+        JSON.stringify(testLinks),
+        JSON.stringify({ source: "manual_test" }),
+      ]
+    );
+
+    res.send("Test kayıt eklendi");
+  } catch (error) {
+    res.status(500).send("Test kayıt hatası: " + error.message);
+  }
+});
+
 app.get("/links/json", async (req, res) => {
   try {
     await ensureTables();
