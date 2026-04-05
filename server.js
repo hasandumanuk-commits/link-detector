@@ -195,40 +195,19 @@ app.get("/find/broadcaster", async (req, res) => {
 
 app.get("/subscribe/chat", async (req, res) => {
   try {
-    if (!KICK_CHANNEL_SLUG) {
-      return res.status(400).send("KICK_CHANNEL_SLUG env değişkeni yok");
-    }
-
     const accessToken = await getAppAccessToken();
 
-    const channelRes = await fetch(
-      `https://api.kick.com/public/v1/channels?slug=${encodeURIComponent(KICK_CHANNEL_SLUG)}`,
-      {
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Accept": "application/json",
-        },
-      }
-    );
+    const broadcasterUserId = 93350154;
 
-    const channelData = await channelRes.json();
-    console.log("CHANNEL JSON:", JSON.stringify(channelData, null, 2));
-
-    let broadcasterUserId = null;
-
-    if (Array.isArray(channelData?.data) && channelData.data.length > 0) {
-      broadcasterUserId = channelData.data[0].broadcaster_user_id;
-    } else if (channelData?.data?.broadcaster_user_id) {
-      broadcasterUserId = channelData.data.broadcaster_user_id;
-    } else if (channelData?.broadcaster_user_id) {
-      broadcasterUserId = channelData.broadcaster_user_id;
-    }
-
-    if (!broadcasterUserId) {
-      return res
-        .status(400)
-        .send("broadcaster_user_id bulunamadı: " + JSON.stringify(channelData));
-    }
+    const payload = {
+      broadcaster_user_id: broadcasterUserId,
+      events: [
+        {
+          name: "chat.message.sent",
+          version: 1
+        }
+      ]
+    };
 
     const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
       method: "POST",
@@ -237,16 +216,20 @@ app.get("/subscribe/chat", async (req, res) => {
         "Authorization": `Bearer ${accessToken}`,
         "Accept": "application/json",
       },
-      body: JSON.stringify({
-        broadcaster_user_id: broadcasterUserId,
-        events: [
-          {
-            name: "chat.message.sent",
-            version: 1,
-          },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
+
+    const subText = await subRes.text();
+
+    res.status(subRes.status).send(
+      "STATUS=" + subRes.status +
+      " | BODY=" + subText +
+      " | PAYLOAD=" + JSON.stringify(payload)
+    );
+  } catch (error) {
+    res.status(500).send("Subscribe hatası: " + error.message);
+  }
+});
 
     const subText = await subRes.text();
     console.log("SUBSCRIBE RESPONSE:", subText);
