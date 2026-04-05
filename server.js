@@ -6,21 +6,6 @@ const crypto = require("crypto");
 const session = require("express-session");
 
 const app = express();
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(
-  session({
-    secret: SESSION_SECRET || "default_secret_change_me",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false
-    }
-  })
-);
-
 const APP_URL = process.env.APP_URL;
 const DATABASE_URL = process.env.DATABASE_URL;
 const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
@@ -36,6 +21,21 @@ const pool = new Pool({
     rejectUnauthorized: false,
   },
 });
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(
+  session({
+    secret: SESSION_SECRET || "default_secret_change_me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false
+    }
+  })
+);
 
 let pkceVerifier = null;
 function requireAuth(req, res, next) {
