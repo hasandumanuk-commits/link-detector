@@ -1581,22 +1581,15 @@ app.get("/links", requireAuth, async (req, res) => {
               </div>
             </div>
 
-            <div class="feed-main">
-              <div class="user-row">
-                <div class="user-name">Link Kaydı</div>
-                <div class="user-badge">ID ${row.id}</div>
-                <div class="user-badge">${escapeHtml(senderText)}</div>
-                ${priorityBadge}
-                <div class="badge-lite ${riskClass}">${escapeHtml(riskLevel)}</div>
-                <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
+            <div class="user-row">
+  <div class="user-name">${escapeHtml(senderText)}</div>
+  <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
                 ${openedBadge}
               </div>
 
               <div class="meta-row">
-                <span class="meta-chip">Domain: ${escapeHtml(domainText || "-")}</span>
-                <span class="meta-chip">Silinmiş: ${row.is_deleted ? "Evet" : "Hayır"}</span>
-                <span class="meta-chip">Güncellendi: ${new Date(row.updated_at).toLocaleString("tr-TR")}</span>
-              </div>
+  <span class="meta-chip">${escapeHtml(domainText || "-")}</span>
+</div>
 
               <div class="message-line">${escapeHtml(messageText)}</div>
 
@@ -1634,38 +1627,15 @@ app.get("/links", requireAuth, async (req, res) => {
                   </select>
                   <button type="submit" class="mini-btn">Kaydet</button>
                 </form>
-
-                <form method="POST" action="/links/note/${row.id}" class="inline-form note-form">
-                  <input
-                    type="text"
-                    name="note"
-                    class="note-input"
-                    value="${escapeHtml(noteText)}"
-                    placeholder="Moderatör notu"
-                  />
-                  <button type="submit" class="mini-btn">Not</button>
-                </form>
+                
               </div>
             </div>
 
             <div class="feed-actions">
-              <a href="/links/raw/${row.id}" class="icon-btn" title="Ham Veriyi Gör">↗</a>
-              <form method="POST" action="/links/priority/${row.id}">
-                <button type="submit" class="icon-btn priority-icon" title="Öncelik">
-                  ${row.is_priority ? "★" : "☆"}
-                </button>
-              </form>
-              ${
-                row.is_deleted
-                  ? `
-                    <form method="POST" action="/links/restore/${row.id}">
-                      <button type="submit" class="icon-btn restore" title="Geri Al">⟲</button>
-                    </form>
-                  `
-                  : `
-                    <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı çöpe taşımak istiyor musun?')">
-                      <button type="submit" class="icon-btn danger" title="Çöpe Taşı">✕</button>
-                    </form>
+  <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
+    <button type="submit" class="icon-btn danger" title="Sil">Sil</button>
+  </form>
+</div>
                   `
               }
             </div>
@@ -2010,14 +1980,14 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-card {
-              border-radius: 22px;
-              padding: 18px;
-              display: grid;
-              grid-template-columns: 190px 1fr 80px;
-              gap: 18px;
-              align-items: start;
-              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-            }
+  border-radius: 20px;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: 140px 1fr 70px;
+  gap: 16px;
+  align-items: start;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
 
             .feed-card:hover {
               transform: translateY(-2px);
@@ -2060,8 +2030,16 @@ app.get("/links", requireAuth, async (req, res) => {
             .dot-3 { color: #f97316; background: #f97316; }
             .dot-4 { color: #ec4899; background: #ec4899; }
 
-            .time { font-size: 12px; color: #dbe6fa; font-weight: 700; line-height: 1.5; }
-            .subtime { font-size: 11px; color: #74839f; }
+            .time {
+  font-size: 12px;
+  color: #cbd5e1;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.subtime {
+  font-size: 11px;
+  color: #64748b;
+}
 
             .user-row {
               display: flex;
@@ -2138,11 +2116,12 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .link-line a {
-              color: #74c4ff;
-              font-size: 14px;
-              font-weight: 700;
-              word-break: break-all;
-            }
+  color: #7dd3fc;
+  font-size: 15px;
+  font-weight: 700;
+  word-break: break-all;
+  line-height: 1.6;
+}
 
             .extra-links {
               margin-top: 10px;
@@ -2189,23 +2168,25 @@ app.get("/links", requireAuth, async (req, res) => {
             .feed-actions form { margin: 0; }
 
             .icon-btn {
-              width: 38px;
-              height: 38px;
-              border-radius: 12px;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              background: #0b1421;
-              color: #dce8ff !important;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-weight: 700;
-              cursor: pointer;
-            }
+  min-width: 52px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(73, 95, 130, 0.25);
+  background: #101827;
+  color: #dce8ff !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 14px;
+}
 
             .icon-btn.danger {
-              color: #ff9baa !important;
-              border-color: rgba(220, 38, 38, 0.35);
-            }
+  background: rgba(220, 38, 38, 0.12);
+  color: #fca5a5 !important;
+  border-color: rgba(220, 38, 38, 0.22);
+}
 
             .icon-btn.restore {
               color: #9ae6b4 !important;
