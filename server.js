@@ -53,9 +53,7 @@ const pool = new Pool({
 let pkceVerifier = null;
 
 function requireAuth(req, res, next) {
-  if (req.session && req.session.isAuthenticated) {
-    return next();
-  }
+  if (req.session && req.session.isAuthenticated) return next();
   return res.redirect("/login");
 }
 
@@ -112,13 +110,11 @@ function detectRisk(links, messageText = "", whitelist = [], blacklist = []) {
 
   const shorteners = ["bit.ly", "tinyurl", "t.co", "goo.gl", "cutt.ly", "shorturl", "short.io"];
   const invites = ["discord.gg", "discord.com", "t.me", "telegram.me", "wa.me"];
-  const adultish = ["onlyfans", "porn", "xxx", "escort", "nsfw", "18+"];
-  const suspicious = ["free skin", "nitro", "gift", "airdrop", "casino", "bet", "hack", "crack", "promo"];
+  const suspicious = ["free", "gift", "nitro", "airdrop", "casino", "promo", "bonus", "katıl", "bedava"];
 
-  if (adultish.some((k) => text.includes(k))) return "Yüksek Risk";
   if (domains.some((d) => shorteners.some((s) => d.includes(s)))) return "Şüpheli";
-  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
   if (domains.some((d) => invites.some((s) => d.includes(s)))) return "Davet Linki";
+  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
 
   return "Normal";
 }
@@ -166,9 +162,8 @@ async function ensureTables() {
       link_domain TEXT,
       risk_level TEXT DEFAULT 'Normal',
       review_status TEXT DEFAULT 'Beklemede',
-      moderator_note TEXT,
       is_deleted BOOLEAN DEFAULT FALSE,
-      is_priority BOOLEAN DEFAULT FALSE,
+      is_opened BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -214,9 +209,7 @@ async function ensureTables() {
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS link_domain TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS risk_level TEXT DEFAULT 'Normal'`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'Beklemede'`);
-  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS moderator_note TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
-  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_priority BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_opened BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
 }
@@ -239,9 +232,7 @@ async function getBlockedUsernames() {
 async function getAppAccessToken() {
   const tokenRes = await fetch("https://id.kick.com/oauth/token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "client_credentials",
       client_id: KICK_CLIENT_ID,
@@ -264,11 +255,10 @@ function baseLayoutStyles() {
     body {
       margin: 0;
       font-family: Arial, sans-serif;
-      color: #f5f7fb;
+      color: #eef4ff;
       background:
         radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
         radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
-        radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
         linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
     }
     a { color: inherit; text-decoration: none; }
@@ -284,9 +274,6 @@ function baseLayoutStyles() {
       background: linear-gradient(135deg, #ffe37a, #facc15);
       color: #0b1b44;
       border: 1px solid rgba(255, 216, 77, 0.35);
-      box-shadow:
-        0 0 18px rgba(250, 204, 21, 0.18),
-        inset 0 1px 0 rgba(255,255,255,0.20);
     }
     .btn-dark {
       background: linear-gradient(180deg, #101b2b, #0a1320);
@@ -306,14 +293,85 @@ function baseLayoutStyles() {
   `;
 }
 
+function buildLinksWhere(reqQuery) {
+  const search = typeof reqQuery.search === "string" ? reqQuery.search.trim() : "";
+  const statusFilter = typeof reqQuery.status === "string" ? reqQuery.status.trim() : "";
+  const riskFilter = typeof reqQuery.risk === "string" ? reqQuery.risk.trim() : "";
+  const domainFilter = typeof reqQuery.domain === "string" ? reqQuery.domain.trim().toLowerCase() : "";
+  const deletedFilter = reqQuery.deleted === "1";
+  const perPage = Math.min(Math.max(Number(reqQuery.per_page || 20), 5), 100);
+  const page = Math.max(Number(reqQuery.page || 1), 1);
+  const sort = typeof reqQuery.sort === "string" ? reqQuery.sort.trim() : "newest";
+
+  const whereParts = [];
+  const values = [];
+  let idx = 1;
+
+  if (search) {
+    whereParts.push(`
+      (
+        CAST(id AS TEXT) ILIKE $${idx}
+        OR COALESCE(sender_username, '') ILIKE $${idx}
+        OR COALESCE(message_text, '') ILIKE $${idx}
+        OR COALESCE(extracted_links, '') ILIKE $${idx}
+        OR COALESCE(raw_data, '') ILIKE $${idx}
+        OR COALESCE(link_domain, '') ILIKE $${idx}
+      )
+    `);
+    values.push(`%${search}%`);
+    idx++;
+  }
+
+  if (statusFilter) {
+    whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
+    values.push(statusFilter);
+    idx++;
+  }
+
+  if (riskFilter) {
+    whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
+    values.push(riskFilter);
+    idx++;
+  }
+
+  if (domainFilter) {
+    whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
+    values.push(`%${domainFilter}%`);
+    idx++;
+  }
+
+  whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
+  values.push(deletedFilter);
+
+  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+  let orderSql = `ORDER BY id DESC`;
+  if (sort === "oldest") orderSql = `ORDER BY id ASC`;
+  if (sort === "domain") orderSql = `ORDER BY COALESCE(link_domain, '') ASC, id DESC`;
+  if (sort === "status") orderSql = `ORDER BY COALESCE(review_status, 'Beklemede') ASC, id DESC`;
+
+  return {
+    search,
+    statusFilter,
+    riskFilter,
+    domainFilter,
+    deletedFilter,
+    perPage,
+    page,
+    sort,
+    whereSql,
+    values,
+    nextIdx: idx,
+    orderSql,
+  };
+}
+
 app.get("/logo.png", (req, res) => {
   res.sendFile(path.join(__dirname, "logo.png"));
 });
 
 app.get("/login", (req, res) => {
-  if (req.session && req.session.isAuthenticated) {
-    return res.redirect("/links");
-  }
+  if (req.session && req.session.isAuthenticated) return res.redirect("/links");
 
   const error = req.query.error ? "Kullanıcı adı veya şifre yanlış." : "";
 
@@ -325,7 +383,6 @@ app.get("/login", (req, res) => {
         <style>
           ${baseLayoutStyles()}
           body {
-            margin: 0;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -347,8 +404,6 @@ app.get("/login", (req, res) => {
             height: 90px;
             border-radius: 50%;
             object-fit: cover;
-            border: 1px solid rgba(255,255,255,0.08);
-            box-shadow: 0 0 24px rgba(255, 216, 77, 0.18);
             background: #111;
           }
           h1 {
@@ -463,29 +518,21 @@ app.get("/auth/kick", requireAuth, (req, res) => {
 app.get("/callback", requireAuth, async (req, res) => {
   try {
     const code = req.query.code;
-
-    if (!code) {
-      return res.status(400).send("Code yok");
-    }
-
-    if (!pkceVerifier) {
-      return res.status(400).send("PKCE verifier yok");
-    }
+    if (!code) return res.status(400).send("Code yok");
+    if (!pkceVerifier) return res.status(400).send("PKCE verifier yok");
 
     const redirectUri = `${APP_URL}/callback`;
 
     const tokenRes = await fetch("https://id.kick.com/oauth/token", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "authorization_code",
         client_id: KICK_CLIENT_ID,
         client_secret: KICK_CLIENT_SECRET,
         redirect_uri: redirectUri,
         code_verifier: pkceVerifier,
-        code: code,
+        code,
       }),
     });
 
@@ -493,11 +540,7 @@ app.get("/callback", requireAuth, async (req, res) => {
 
     await ensureTables();
 
-    await pool.query(
-      `INSERT INTO oauth_tokens (raw_data) VALUES ($1)`,
-      [JSON.stringify(tokenData)]
-    );
-
+    await pool.query(`INSERT INTO oauth_tokens (raw_data) VALUES ($1)`, [JSON.stringify(tokenData)]);
     await logAudit("KICK_CALLBACK", null, "token kaydedildi");
 
     res.send("Kick yetkilendirme tamamlandı. Token kaydedildi.");
@@ -509,9 +552,7 @@ app.get("/callback", requireAuth, async (req, res) => {
 
 app.get("/find/broadcaster", requireAuth, async (req, res) => {
   try {
-    if (!KICK_CHANNEL_SLUG) {
-      return res.status(400).send("KICK_CHANNEL_SLUG env değişkeni yok");
-    }
+    if (!KICK_CHANNEL_SLUG) return res.status(400).send("KICK_CHANNEL_SLUG env değişkeni yok");
 
     const accessToken = await getAppAccessToken();
 
@@ -553,17 +594,10 @@ app.get("/subscribe/chat", requireAuth, async (req, res) => {
       return res.status(400).send("Access token bulunamadı.");
     }
 
-    const broadcasterUserId = 93350154;
-
     const payload = {
       method: "webhook",
-      broadcaster_user_id: broadcasterUserId,
-      events: [
-        {
-          name: "chat.message.sent",
-          version: 1,
-        },
-      ],
+      broadcaster_user_id: 93350154,
+      events: [{ name: "chat.message.sent", version: 1 }],
     };
 
     const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
@@ -616,11 +650,7 @@ app.post("/webhook/kick", async (req, res) => {
     const links = extractLinks(possibleText);
 
     if (!links.length) {
-      return res.status(200).json({
-        success: true,
-        skipped: true,
-        reason: "no_link_in_message",
-      });
+      return res.status(200).json({ success: true, skipped: true, reason: "no_link_in_message" });
     }
 
     await ensureTables();
@@ -645,7 +675,6 @@ app.post("/webhook/kick", async (req, res) => {
     }
 
     const firstDomain = links.length ? getDomain(links[0]) : "";
-
     const whitelist = await getWhitelistDomains();
     const blacklist = await getBlacklistDomains();
     const riskLevel = detectRisk(links, possibleText, whitelist, blacklist);
@@ -660,11 +689,11 @@ app.post("/webhook/kick", async (req, res) => {
         link_domain,
         risk_level,
         review_status,
-        moderator_note,
         is_deleted,
+        is_opened,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, FALSE, CURRENT_TIMESTAMP)
       `,
       [
         senderUsername || null,
@@ -674,22 +703,12 @@ app.post("/webhook/kick", async (req, res) => {
         firstDomain || null,
         riskLevel,
         "Beklemede",
-        null,
-        false,
       ]
     );
 
-    await logAudit(
-      "WEBHOOK_INSERT",
-      null,
-      `user=${senderUsername || ""} domain=${firstDomain || ""} risk=${riskLevel}`
-    );
+    await logAudit("WEBHOOK_INSERT", null, `user=${senderUsername} domain=${firstDomain} risk=${riskLevel}`);
 
-    res.status(200).json({
-      success: true,
-      found_links: links,
-      username: senderUsername,
-    });
+    res.status(200).json({ success: true, found_links: links, username: senderUsername });
   } catch (error) {
     console.error("WEBHOOK ERROR:", error);
     res.status(500).json({ success: false, error: error.message });
@@ -704,7 +723,7 @@ app.get("/links/live", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, is_deleted, is_opened, created_at, updated_at
       FROM links
       WHERE id > $1 AND COALESCE(is_deleted, FALSE) = FALSE
       ORDER BY id ASC
@@ -719,9 +738,65 @@ app.get("/links/live", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/links/delete/:id", requireAuth, async (req, res) => {
+app.get("/links/open/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
+
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `SELECT id, extracted_links FROM links WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+
+    if (!result.rows.length) return res.status(404).send("Kayıt bulunamadı");
+
+    let parsedLinks = [];
+    try {
+      parsedLinks = JSON.parse(result.rows[0].extracted_links || "[]");
+    } catch {
+      parsedLinks = [];
+    }
+
+    const firstLink = parsedLinks[0];
+    if (!firstLink) return res.status(404).send("Açılacak link bulunamadı");
+
+    await pool.query(
+      `UPDATE links SET is_opened = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    await logAudit("LINK_OPENED", id, firstLink);
+
+    return res.redirect(firstLink);
+  } catch (error) {
+    console.error("LINK OPEN ERROR:", error);
+    res.status(500).send("Link açma hatası: " + error.message);
+  }
+});
+
+app.post("/links/status/:id", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const id = req.params.id;
+    const allowed = ["Onaylandı", "Reddedildi", "Beklemede", "İnceleniyor"];
+    const status = allowed.includes(req.body.status) ? req.body.status : "Beklemede";
+
+    await pool.query(
+      `UPDATE links SET review_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [status, id]
+    );
+
+    await logAudit("STATUS_UPDATE", Number(id), `status=${status}`);
+    res.redirect("/links" + (req.query.deleted === "1" ? "?deleted=1" : ""));
+  } catch (error) {
+    res.status(500).send("Durum güncelleme hatası: " + error.message);
+  }
+});
+
+app.post("/links/delete/:id", requireAuth, async (req, res) => {
+  try {
     const id = req.params.id;
     await pool.query(
       `UPDATE links SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -736,7 +811,6 @@ app.post("/links/delete/:id", requireAuth, async (req, res) => {
 
 app.post("/links/restore/:id", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
     const id = req.params.id;
     await pool.query(
       `UPDATE links SET is_deleted = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -749,81 +823,41 @@ app.post("/links/restore/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/links/status/:id", requireAuth, async (req, res) => {
+app.post("/links/destroy/:id", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
     const id = req.params.id;
-    const allowed = ["Onaylandı", "Reddedildi", "Beklemede", "İnceleniyor"];
-    const status = allowed.includes(req.body.status) ? req.body.status : "Beklemede";
-
-    await pool.query(
-      `UPDATE links SET review_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [status, id]
-    );
-
-    await logAudit("STATUS_UPDATE", Number(id), `status=${status}`);
-    res.redirect("/links");
+    await pool.query(`DELETE FROM links WHERE id = $1`, [id]);
+    await logAudit("DELETE_FOREVER", Number(id), "kalıcı silindi");
+    res.redirect("/links?deleted=1");
   } catch (error) {
-    res.status(500).send("Durum güncelleme hatası: " + error.message);
+    res.status(500).send("Kalıcı silme hatası: " + error.message);
   }
 });
 
-app.post("/links/note/:id", requireAuth, async (req, res) => {
+app.post("/trash/empty", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-    const id = req.params.id;
-    const note = (req.body.note || "").trim().slice(0, 500);
-
-    await pool.query(
-      `UPDATE links SET moderator_note = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [note || null, id]
-    );
-
-    await logAudit("NOTE_UPDATE", Number(id), note || "");
-    res.redirect("/links");
+    await pool.query(`DELETE FROM links WHERE COALESCE(is_deleted, FALSE) = TRUE`);
+    await logAudit("TRASH_EMPTY", null, "çöp tamamen boşaltıldı");
+    res.redirect("/links?deleted=1");
   } catch (error) {
-    res.status(500).send("Not kaydetme hatası: " + error.message);
-  }
-});
-
-app.post("/links/priority/:id", requireAuth, async (req, res) => {
-  try {
-    await ensureTables();
-    const id = req.params.id;
-
-    await pool.query(
-      `UPDATE links SET is_priority = NOT COALESCE(is_priority, FALSE), updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
-    );
-
-    await logAudit("PRIORITY_TOGGLE", Number(id), "priority değişti");
-    res.redirect("/links");
-  } catch (error) {
-    res.status(500).send("Öncelik değiştirme hatası: " + error.message);
+    res.status(500).send("Çöp boşaltma hatası: " + error.message);
   }
 });
 
 app.post("/links/bulk-action", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
     const ids = Array.isArray(req.body.ids)
       ? req.body.ids
       : req.body.ids
       ? [req.body.ids]
       : [];
 
-    const action = req.body.action;
-
-    if (!ids.length) {
-      return res.redirect("/links");
-    }
+    if (!ids.length) return res.redirect("/links");
 
     const numericIds = ids.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+    if (!numericIds.length) return res.redirect("/links");
 
-    if (!numericIds.length) {
-      return res.redirect("/links");
-    }
+    const action = req.body.action;
 
     if (action === "approve") {
       await pool.query(
@@ -831,27 +865,37 @@ app.post("/links/bulk-action", requireAuth, async (req, res) => {
         [numericIds]
       );
       await logAudit("BULK_APPROVE", null, `ids=${numericIds.join(",")}`);
-    } else if (action === "reject") {
-      await pool.query(
-        `UPDATE links SET review_status = 'Reddedildi', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
-        [numericIds]
-      );
-      await logAudit("BULK_REJECT", null, `ids=${numericIds.join(",")}`);
     } else if (action === "review") {
       await pool.query(
         `UPDATE links SET review_status = 'İnceleniyor', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
         [numericIds]
       );
       await logAudit("BULK_REVIEW", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "reject") {
+      await pool.query(
+        `UPDATE links SET review_status = 'Reddedildi', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_REJECT", null, `ids=${numericIds.join(",")}`);
     } else if (action === "delete") {
       await pool.query(
         `UPDATE links SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
         [numericIds]
       );
-      await logAudit("BULK_DELETE", null, `ids=${numericIds.join(",")}`);
+      await logAudit("BULK_SOFT_DELETE", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "restore") {
+      await pool.query(
+        `UPDATE links SET is_deleted = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_RESTORE", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "destroy") {
+      await pool.query(`DELETE FROM links WHERE id = ANY($1::int[])`, [numericIds]);
+      await logAudit("BULK_DESTROY", null, `ids=${numericIds.join(",")}`);
     }
 
-    res.redirect("/links");
+    const redirectDeleted = req.body.deleted === "1" ? "?deleted=1" : "";
+    res.redirect("/links" + redirectDeleted);
   } catch (error) {
     res.status(500).send("Toplu işlem hatası: " + error.message);
   }
@@ -859,7 +903,6 @@ app.post("/links/bulk-action", requireAuth, async (req, res) => {
 
 app.post("/domains/whitelist", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
     const domain = String(req.body.domain || "").trim().toLowerCase().replace(/^www\./, "");
     if (!domain) return res.redirect("/links");
 
@@ -877,7 +920,6 @@ app.post("/domains/whitelist", requireAuth, async (req, res) => {
 
 app.post("/domains/blacklist", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
     const domain = String(req.body.domain || "").trim().toLowerCase().replace(/^www\./, "");
     if (!domain) return res.redirect("/links");
 
@@ -895,9 +937,8 @@ app.post("/domains/blacklist", requireAuth, async (req, res) => {
 
 app.post("/domains/whitelist/delete/:id", requireAuth, async (req, res) => {
   try {
-    const id = req.params.id;
-    await pool.query(`DELETE FROM whitelist_domains WHERE id = $1`, [id]);
-    await logAudit("WHITELIST_DELETE", Number(id), "silindi");
+    await pool.query(`DELETE FROM whitelist_domains WHERE id = $1`, [req.params.id]);
+    await logAudit("WHITELIST_DELETE", Number(req.params.id), "silindi");
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Whitelist silme hatası: " + error.message);
@@ -906,9 +947,8 @@ app.post("/domains/whitelist/delete/:id", requireAuth, async (req, res) => {
 
 app.post("/domains/blacklist/delete/:id", requireAuth, async (req, res) => {
   try {
-    const id = req.params.id;
-    await pool.query(`DELETE FROM blacklist_domains WHERE id = $1`, [id]);
-    await logAudit("BLACKLIST_DELETE", Number(id), "silindi");
+    await pool.query(`DELETE FROM blacklist_domains WHERE id = $1`, [req.params.id]);
+    await logAudit("BLACKLIST_DELETE", Number(req.params.id), "silindi");
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Blacklist silme hatası: " + error.message);
@@ -917,8 +957,6 @@ app.post("/domains/blacklist/delete/:id", requireAuth, async (req, res) => {
 
 app.post("/users/block", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
     const username = String(req.body.username || "").trim().toLowerCase();
     if (!username) return res.redirect("/links");
 
@@ -936,109 +974,22 @@ app.post("/users/block", requireAuth, async (req, res) => {
 
 app.post("/users/block/delete/:id", requireAuth, async (req, res) => {
   try {
-    const id = req.params.id;
-    await pool.query(`DELETE FROM blocked_usernames WHERE id = $1`, [id]);
-    await logAudit("BLOCK_USERNAME_DELETE", Number(id), "silindi");
+    await pool.query(`DELETE FROM blocked_usernames WHERE id = $1`, [req.params.id]);
+    await logAudit("BLOCK_USERNAME_DELETE", Number(req.params.id), "silindi");
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Engelli kullanıcı silme hatası: " + error.message);
   }
 });
 
-app.get("/links/open/:id", requireAuth, async (req, res) => {
-  try {
-    await ensureTables();
-
-    const id = Number(req.params.id);
-
-    const result = await pool.query(
-      `SELECT id, extracted_links FROM links WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-
-    if (!result.rows.length) {
-      return res.status(404).send("Kayıt bulunamadı");
-    }
-
-    let parsedLinks = [];
-    try {
-      parsedLinks = JSON.parse(result.rows[0].extracted_links || "[]");
-    } catch {
-      parsedLinks = [];
-    }
-
-    const firstLink = parsedLinks[0];
-    if (!firstLink) {
-      return res.status(404).send("Açılacak link bulunamadı");
-    }
-
-    await pool.query(
-      `UPDATE links SET is_opened = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
-    );
-
-    await logAudit("LINK_OPENED", id, firstLink);
-
-    return res.redirect(firstLink);
-  } catch (error) {
-    res.status(500).send("Link açma hatası: " + error.message);
-  }
-});
-
-app.get("/links/open/:id", requireAuth, async (req, res) => {
-  try {
-    await ensureTables();
-
-    const id = Number(req.params.id);
-
-    const result = await pool.query(
-      `SELECT id, extracted_links FROM links WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-
-    if (!result.rows.length) {
-      return res.status(404).send("Kayıt bulunamadı");
-    }
-
-    let parsedLinks = [];
-    try {
-      parsedLinks = JSON.parse(result.rows[0].extracted_links || "[]");
-    } catch {
-      parsedLinks = [];
-    }
-
-    const firstLink = parsedLinks[0];
-    if (!firstLink) {
-      return res.status(404).send("Açılacak link bulunamadı");
-    }
-
-    await pool.query(
-      `UPDATE links SET is_opened = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
-    );
-
-    await logAudit("LINK_OPENED", id, firstLink);
-
-    return res.redirect(firstLink);
-  } catch (error) {
-    res.status(500).send("Link açma hatası: " + error.message);
-  }
-});
-
 app.get("/links/raw/:id", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
-    const id = req.params.id;
-
     const result = await pool.query(
       `SELECT id, sender_username, raw_data, created_at, updated_at FROM links WHERE id = $1 LIMIT 1`,
-      [id]
+      [req.params.id]
     );
 
-    if (!result.rows.length) {
-      return res.status(404).send("Kayıt bulunamadı");
-    }
+    if (!result.rows.length) return res.status(404).send("Kayıt bulunamadı");
 
     const row = result.rows[0];
 
@@ -1051,10 +1002,8 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
             ${baseLayoutStyles()}
             body { padding: 24px; }
             .wrap { max-width: 1000px; margin: 0 auto; }
-            .top { margin-bottom: 20px; }
             .btn {
               display: inline-block;
-              text-decoration: none;
               padding: 10px 14px;
               border-radius: 10px;
               margin-right: 10px;
@@ -1063,6 +1012,7 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
             .card {
               border-radius: 18px;
               padding: 18px;
+              margin-top: 18px;
             }
             pre {
               white-space: pre-wrap;
@@ -1072,21 +1022,15 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
               border-radius: 10px;
               padding: 14px;
               line-height: 1.6;
-              overflow-x: auto;
             }
           </style>
         </head>
         <body>
           <div class="wrap">
-            <div class="top">
-              <a class="btn btn-yellow" href="/links">Panele Dön</a>
-              <a class="btn btn-dark" href="/">Ana Sayfa</a>
-            </div>
+            <a class="btn btn-yellow" href="/links">Panele Dön</a>
             <div class="card glass">
               <h2>Kayıt #${row.id}</h2>
               <p>Kullanıcı: ${escapeHtml(row.sender_username || "-")}</p>
-              <p>Oluşturulma: ${new Date(row.created_at).toLocaleString("tr-TR")}</p>
-              <p>Güncellenme: ${new Date(row.updated_at).toLocaleString("tr-TR")}</p>
               <pre>${escapeHtml(row.raw_data)}</pre>
             </div>
           </div>
@@ -1098,106 +1042,13 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
   }
 });
 
-function buildLinksWhere(reqQuery) {
-  const search = typeof reqQuery.search === "string" ? reqQuery.search.trim() : "";
-  const statusFilter = typeof reqQuery.status === "string" ? reqQuery.status.trim() : "";
-  const riskFilter = typeof reqQuery.risk === "string" ? reqQuery.risk.trim() : "";
-  const domainFilter = typeof reqQuery.domain === "string" ? reqQuery.domain.trim().toLowerCase() : "";
-  const deletedFilter = reqQuery.deleted === "1";
-  const perPage = Math.min(Math.max(Number(reqQuery.per_page || 20), 5), 100);
-  const page = Math.max(Number(reqQuery.page || 1), 1);
-  const sort = typeof reqQuery.sort === "string" ? reqQuery.sort.trim() : "newest";
-
-  const whereParts = [];
-  const values = [];
-  let idx = 1;
-
-  if (search) {
-    whereParts.push(`
-      (
-        CAST(id AS TEXT) ILIKE $${idx}
-        OR COALESCE(sender_username, '') ILIKE $${idx}
-        OR COALESCE(message_text, '') ILIKE $${idx}
-        OR COALESCE(extracted_links, '') ILIKE $${idx}
-        OR COALESCE(raw_data, '') ILIKE $${idx}
-        OR COALESCE(link_domain, '') ILIKE $${idx}
-        OR COALESCE(moderator_note, '') ILIKE $${idx}
-      )
-    `);
-    values.push(`%${search}%`);
-    idx++;
-  }
-
-  if (statusFilter) {
-    whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
-    values.push(statusFilter);
-    idx++;
-  }
-
-  if (riskFilter) {
-    whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
-    values.push(riskFilter);
-    idx++;
-  }
-
-  if (domainFilter) {
-    whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
-    values.push(`%${domainFilter}%`);
-    idx++;
-  }
-
-  whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
-  values.push(deletedFilter);
-
-  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
-
-  let orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id DESC`;
-  if (sort === "oldest") {
-    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id ASC`;
-  } else if (sort === "risk") {
-    orderSql = `
-      ORDER BY
-        COALESCE(is_priority, FALSE) DESC,
-        CASE COALESCE(risk_level, 'Normal')
-          WHEN 'Yüksek Risk' THEN 1
-          WHEN 'Şüpheli' THEN 2
-          WHEN 'Davet Linki' THEN 3
-          WHEN 'Whitelist' THEN 5
-          ELSE 4
-        END ASC,
-        id DESC
-    `;
-  } else if (sort === "domain") {
-    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(link_domain, '') ASC, id DESC`;
-  } else if (sort === "status") {
-    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(review_status, 'Beklemede') ASC, id DESC`;
-  }
-
-  return {
-    search,
-    statusFilter,
-    riskFilter,
-    domainFilter,
-    deletedFilter,
-    perPage,
-    page,
-    sort,
-    whereSql,
-    values,
-    nextIdx: idx,
-    orderSql,
-  };
-}
-
 app.get("/links/json", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
     const built = buildLinksWhere(req.query);
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, is_deleted, is_opened, created_at, updated_at
       FROM links
       ${built.whereSql}
       ${built.orderSql}
@@ -1214,13 +1065,11 @@ app.get("/links/json", requireAuth, async (req, res) => {
 
 app.get("/links/export/csv", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
     const built = buildLinksWhere(req.query);
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, link_domain, risk_level, review_status, is_deleted, is_opened, created_at, updated_at
       FROM links
       ${built.whereSql}
       ${built.orderSql}
@@ -1237,9 +1086,8 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
       "link_domain",
       "risk_level",
       "review_status",
-      "moderator_note",
       "is_deleted",
-      "is_priority",
+      "is_opened",
       "created_at",
       "updated_at",
     ].join(",");
@@ -1253,9 +1101,8 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
         csvEscape(row.link_domain),
         csvEscape(row.risk_level),
         csvEscape(row.review_status),
-        csvEscape(row.moderator_note),
         csvEscape(row.is_deleted),
-        csvEscape(row.is_priority),
+        csvEscape(row.is_opened),
         csvEscape(row.created_at),
         csvEscape(row.updated_at),
       ].join(",")
@@ -1273,59 +1120,14 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
 
 app.get("/audit", requireAuth, async (req, res) => {
   try {
-    await ensureTables();
-
-    const page = Math.max(Number(req.query.page || 1), 1);
-    const perPage = Math.min(Math.max(Number(req.query.per_page || 30), 10), 100);
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const actionType = typeof req.query.action_type === "string" ? req.query.action_type.trim() : "";
-
-    const whereParts = [];
-    const values = [];
-    let idx = 1;
-
-    if (search) {
-      whereParts.push(`(COALESCE(action_type, '') ILIKE $${idx} OR COALESCE(details, '') ILIKE $${idx})`);
-      values.push(`%${search}%`);
-      idx++;
-    }
-
-    if (actionType) {
-      whereParts.push(`action_type = $${idx}`);
-      values.push(actionType);
-      idx++;
-    }
-
-    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM audit_logs ${whereSql}`,
-      values
-    );
-
-    const total = countResult.rows[0]?.total || 0;
-    const totalPages = Math.max(Math.ceil(total / perPage), 1);
-    const safePage = Math.min(page, totalPages);
-    const offset = (safePage - 1) * perPage;
-
-    const listResult = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT id, action_type, target_id, details, created_at
       FROM audit_logs
-      ${whereSql}
       ORDER BY id DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-      `,
-      [...values, perPage, offset]
-    );
+      LIMIT 100
+    `);
 
-    const baseQuery = {
-      search,
-      action_type: actionType,
-      per_page: perPage,
-    };
-
-    const rowsHtml = listResult.rows
+    const rowsHtml = result.rows
       .map(
         (row) => `
           <tr>
@@ -1347,38 +1149,9 @@ app.get("/audit", requireAuth, async (req, res) => {
           <style>
             ${baseLayoutStyles()}
             body { padding: 24px; }
-            .wrap { max-width: 1400px; margin: 0 auto; }
+            .wrap { max-width: 1300px; margin: 0 auto; }
             .card { border-radius: 24px; padding: 20px; }
-            .top {
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              gap: 12px;
-              margin-bottom: 16px;
-              flex-wrap: wrap;
-            }
-            .title { font-size: 28px; font-weight: 800; }
-            .btn {
-              border: none;
-              border-radius: 12px;
-              padding: 10px 14px;
-              font-weight: 700;
-              cursor: pointer;
-            }
-            .input, .select {
-              background: linear-gradient(180deg, #0a1524, #07111c);
-              border: 1px solid rgba(96, 120, 168, 0.22);
-              outline: none;
-              color: white;
-              font-size: 14px;
-              border-radius: 14px;
-              padding: 10px 12px;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              overflow: hidden;
-            }
+            table { width: 100%; border-collapse: collapse; }
             th, td {
               border-bottom: 1px solid rgba(102, 126, 173, 0.16);
               padding: 12px;
@@ -1387,59 +1160,34 @@ app.get("/audit", requireAuth, async (req, res) => {
               font-size: 14px;
             }
             th { color: #ffe37a; }
-            .actions {
-              display: flex;
-              gap: 10px;
-              flex-wrap: wrap;
-              margin-top: 16px;
+            .btn {
+              display: inline-block;
+              padding: 10px 14px;
+              border-radius: 10px;
+              margin-right: 10px;
+              font-weight: 700;
             }
           </style>
         </head>
         <body>
           <div class="wrap">
-            <div class="card glass">
-              <div class="top">
-                <div class="title">Audit Log</div>
-                <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                  <a class="btn btn-yellow" href="/links">Panele Dön</a>
-                  <a class="btn btn-dark" href="/logout">Çıkış</a>
-                </div>
-              </div>
-
-              <form method="GET" action="/audit" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
-                <input class="input" type="text" name="search" placeholder="işlem ara" value="${escapeHtml(search)}" />
-                <input class="input" type="text" name="action_type" placeholder="action type" value="${escapeHtml(actionType)}" />
-                <select class="select" name="per_page">
-                  <option value="30" ${perPage === 30 ? "selected" : ""}>30</option>
-                  <option value="50" ${perPage === 50 ? "selected" : ""}>50</option>
-                  <option value="100" ${perPage === 100 ? "selected" : ""}>100</option>
-                </select>
-                <button class="btn btn-yellow" type="submit">Filtrele</button>
-                <a class="btn btn-dark" href="/audit">Temizle</a>
-              </form>
-
-              <div style="overflow:auto;">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>İşlem</th>
-                      <th>Target</th>
-                      <th>Detay</th>
-                      <th>Tarih</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${rowsHtml || `<tr><td colspan="5">Kayıt yok.</td></tr>`}
-                  </tbody>
-                </table>
-              </div>
-
-              <div class="actions">
-                <a class="btn btn-dark" href="/audit${buildQuery(baseQuery, { page: Math.max(safePage - 1, 1) })}">Önceki</a>
-                <span class="pill">Sayfa ${safePage} / ${totalPages}</span>
-                <a class="btn btn-dark" href="/audit${buildQuery(baseQuery, { page: Math.min(safePage + 1, totalPages) })}">Sonraki</a>
-              </div>
+            <a class="btn btn-yellow" href="/links">Panele Dön</a>
+            <div class="card glass" style="margin-top:18px;">
+              <h2>Audit Log</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>İşlem</th>
+                    <th>Target</th>
+                    <th>Detay</th>
+                    <th>Tarih</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml || `<tr><td colspan="5">Kayıt yok.</td></tr>`}
+                </tbody>
+              </table>
             </div>
           </div>
         </body>
@@ -1455,13 +1203,7 @@ app.get("/links", requireAuth, async (req, res) => {
     await ensureTables();
 
     const built = buildLinksWhere(req.query);
-    const offset = (built.page - 1) * built.perPage;
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM links ${built.whereSql}`,
-      built.values
-    );
-
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links ${built.whereSql}`, built.values);
     const totalFiltered = countResult.rows[0]?.total || 0;
     const totalPages = Math.max(Math.ceil(totalFiltered / built.perPage), 1);
     const safePage = Math.min(built.page, totalPages);
@@ -1469,7 +1211,7 @@ app.get("/links", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, is_deleted, is_opened, created_at, updated_at
       FROM links
       ${built.whereSql}
       ${built.orderSql}
@@ -1480,12 +1222,7 @@ app.get("/links", requireAuth, async (req, res) => {
 
     const totalCountResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links WHERE COALESCE(is_deleted, FALSE) = FALSE`);
     const deletedCountResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links WHERE COALESCE(is_deleted, FALSE) = TRUE`);
-    const todayCountResult = await pool.query(`
-      SELECT COUNT(*)::int AS total
-      FROM links
-      WHERE COALESCE(is_deleted, FALSE) = FALSE
-      AND created_at::date = CURRENT_DATE
-    `);
+    const todayCountResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links WHERE created_at::date = CURRENT_DATE AND COALESCE(is_deleted, FALSE) = FALSE`);
     const suspiciousCountResult = await pool.query(`
       SELECT COUNT(*)::int AS total
       FROM links
@@ -1498,73 +1235,69 @@ app.get("/links", requireAuth, async (req, res) => {
       WHERE COALESCE(is_deleted, FALSE) = FALSE
       AND COALESCE(review_status, 'Beklemede') = 'Onaylandı'
     `);
-    const domainStatResult = await pool.query(`
-      SELECT COALESCE(link_domain, '') AS link_domain, COUNT(*)::int AS total
-      FROM links
-      WHERE COALESCE(is_deleted, FALSE) = FALSE
-      GROUP BY link_domain
-      ORDER BY total DESC, link_domain ASC
-      LIMIT 5
-    `);
-    const recentAuditResult = await pool.query(`
-      SELECT id, action_type, target_id, details, created_at
-      FROM audit_logs
-      ORDER BY id DESC
-      LIMIT 8
-    `);
-    const whitelistResult = await pool.query(`
-      SELECT id, domain
-      FROM whitelist_domains
-      ORDER BY domain ASC
-      LIMIT 20
-    `);
-    const blacklistResult = await pool.query(`
-      SELECT id, domain
-      FROM blacklist_domains
-      ORDER BY domain ASC
-      LIMIT 20
-    `);
-    const blockedUsersResult = await pool.query(`
-      SELECT id, username
-      FROM blocked_usernames
-      ORDER BY username ASC
-      LIMIT 30
-    `);
-    
-    const blockedUsersHtml = blockedUsersResult.rows
-  .map(
-    (row) => `
-      <div class="domain-item">
-        <span>${escapeHtml(row.username)}</span>
-        <form method="POST" action="/users/block/delete/${row.id}">
-          <button type="submit" class="domain-del">Sil</button>
-        </form>
-      </div>
-    `
-  )
-  .join("");
-    
-    const lastRecordResult = await pool.query(`
-      SELECT created_at
-      FROM links
-      WHERE COALESCE(is_deleted, FALSE) = FALSE
-      ORDER BY id DESC
-      LIMIT 1
-    `);
 
+    const whitelistResult = await pool.query(`SELECT id, domain FROM whitelist_domains ORDER BY domain ASC LIMIT 20`);
+    const blacklistResult = await pool.query(`SELECT id, domain FROM blacklist_domains ORDER BY domain ASC LIMIT 20`);
+    const blockedUsersResult = await pool.query(`SELECT id, username FROM blocked_usernames ORDER BY username ASC LIMIT 20`);
+    const recentAuditResult = await pool.query(`SELECT id, action_type, details, created_at FROM audit_logs ORDER BY id DESC LIMIT 8`);
+
+    const rows = result.rows;
     const totalCount = totalCountResult.rows[0]?.total || 0;
     const deletedCount = deletedCountResult.rows[0]?.total || 0;
     const todayCount = todayCountResult.rows[0]?.total || 0;
     const suspiciousCount = suspiciousCountResult.rows[0]?.total || 0;
     const approvedCount = approvedCountResult.rows[0]?.total || 0;
-    const rows = result.rows;
-    const lastRecordAt = lastRecordResult.rows[0]?.created_at
-      ? new Date(lastRecordResult.rows[0].created_at).toLocaleString("tr-TR")
-      : "-";
 
-    const domainStatsHtml = domainStatResult.rows
+    const whitelistHtml = whitelistResult.rows
       .map(
-        (r) => `<div class="domain-stat-row"><span>${escapeHtml(r.link_domain || "-")}</span><strong>${r.total}</strong></div>`
+        (row) => `
+          <div class="list-item">
+            <span>${escapeHtml(row.domain)}</span>
+            <form method="POST" action="/domains/whitelist/delete/${row.id}">
+              <button type="submit" class="small-del">Sil</button>
+            </form>
+          </div>
+        `
+      )
+      .join("");
+
+    const blacklistHtml = blacklistResult.rows
+      .map(
+        (row) => `
+          <div class="list-item">
+            <span>${escapeHtml(row.domain)}</span>
+            <form method="POST" action="/domains/blacklist/delete/${row.id}">
+              <button type="submit" class="small-del">Sil</button>
+            </form>
+          </div>
+        `
+      )
+      .join("");
+
+    const blockedUsersHtml = blockedUsersResult.rows
+      .map(
+        (row) => `
+          <div class="list-item">
+            <span>${escapeHtml(row.username)}</span>
+            <form method="POST" action="/users/block/delete/${row.id}">
+              <button type="submit" class="small-del">Sil</button>
+            </form>
+          </div>
+        `
+      )
+      .join("");
+
+    const auditHtml = recentAuditResult.rows
+      .map(
+        (row) => `
+          <div class="audit-item">
+            <div class="audit-top">
+              <strong>${escapeHtml(row.action_type)}</strong>
+              <span>${new Date(row.created_at).toLocaleString("tr-TR")}</span>
+            </div>
+            <div class="audit-bottom">${escapeHtml(row.details || "")}</div>
+          </div>
+        `
       )
       .join("");
 
@@ -1578,28 +1311,11 @@ app.get("/links", requireAuth, async (req, res) => {
         }
 
         const firstLink = parsedLinks[0] || "";
-        const messageText = row.message_text || "Mesaj yok";
         const timeText = new Date(row.created_at).toLocaleString("tr-TR");
-        const domainText = row.link_domain || (firstLink ? getDomain(firstLink) : "-");
-        const riskLevel = row.risk_level || "Normal";
-        const reviewStatus = row.review_status || "Beklemede";
-        const noteText = row.moderator_note || "";
-        const openedBadge = row.is_opened
-  ? `<div class="badge-lite opened-badge">Açıldı</div>`
-  : "";
         const senderText = row.sender_username || "-";
-        const priorityBadge = row.is_priority ? `<div class="badge-lite priority-badge">Öncelikli</div>` : "";
-
-        const riskClass =
-          riskLevel === "Yüksek Risk"
-            ? "risk-high"
-            : riskLevel === "Şüpheli"
-            ? "risk-mid"
-            : riskLevel === "Davet Linki"
-            ? "risk-invite"
-            : riskLevel === "Whitelist"
-            ? "risk-whitelist"
-            : "risk-normal";
+        const domainText = row.link_domain || (firstLink ? getDomain(firstLink) : "-");
+        const reviewStatus = row.review_status || "Beklemede";
+        const openedBadge = row.is_opened ? `<div class="badge-lite opened-badge">Açıldı</div>` : "";
 
         const statusClass =
           reviewStatus === "Onaylandı"
@@ -1610,97 +1326,72 @@ app.get("/links", requireAuth, async (req, res) => {
             ? "status-review"
             : "status-pending";
 
-        return `
-  <div class="feed-card ${row.is_priority ? "priority-card" : ""}">
-    <div class="feed-left">
-      <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
-      <div class="dot dot-${index % 5}"></div>
-      <div class="time-block">
-        <div class="time">${timeText}</div>
-        <div class="subtime">Kayıt #${row.id}</div>
-      </div>
-    </div>
-
-    <div class="feed-main">
-      <div class="user-row">
-        <div class="user-name">${escapeHtml(senderText)}</div>
-        <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
-        ${openedBadge}
-        <div class="meta-chip">${escapeHtml(domainText || "-")}</div>
-      </div>
-
-      <div class="message-line">${escapeHtml(messageText)}</div>
-
-      <div class="link-line">
-        ${
-          firstLink
-            ? `<a href="/links/open/${row.id}" target="_blank">${escapeHtml(firstLink)}</a>`
-            : `<span class="muted">Link bulunamadı</span>`
-        }
-      </div>
-
-      <div class="tools-grid">
-        <form method="POST" action="/links/status/${row.id}" class="inline-form">
-          <select name="status" class="select">
-            <option ${reviewStatus === "Beklemede" ? "selected" : ""}>Beklemede</option>
-            <option ${reviewStatus === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
-            <option ${reviewStatus === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
-            <option ${reviewStatus === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
-          </select>
-          <button type="submit" class="mini-btn">Kaydet</button>
-        </form>
-      </div>
-    </div>
-
-    <div class="feed-actions">
-      <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
-        <button type="submit" class="icon-btn danger" title="Sil">Sil</button>
-      </form>
-    </div>
-  </div>
-`;
-      })
-      .join("");
-
-    const auditHtml = recentAuditResult.rows
-      .map((row) => {
-        return `
-          <div class="audit-item">
-            <div class="audit-top">
-              <strong>${escapeHtml(row.action_type)}</strong>
-              <span>${new Date(row.created_at).toLocaleString("tr-TR")}</span>
+        const actionArea = built.deletedFilter
+          ? `
+            <div class="feed-actions">
+              <form method="POST" action="/links/restore/${row.id}">
+                <button type="submit" class="icon-btn restore">Geri Al</button>
+              </form>
+              <form method="POST" action="/links/destroy/${row.id}" onsubmit="return confirm('Bu kaydı kalıcı olarak silmek istiyor musun?')">
+                <button type="submit" class="icon-btn danger">Kalıcı Sil</button>
+              </form>
             </div>
-            <div class="audit-bottom">${escapeHtml(row.details || "")}</div>
+          `
+          : `
+            <div class="feed-actions">
+              <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı çöpe taşımak istiyor musun?')">
+                <button type="submit" class="icon-btn danger">Sil</button>
+              </form>
+            </div>
+          `;
+
+        return `
+          <div class="feed-card">
+            <div class="feed-left">
+              <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
+              <div class="dot dot-${index % 5}"></div>
+              <div class="time-block">
+                <div class="time">${timeText}</div>
+                <div class="subtime">Kayıt #${row.id}</div>
+              </div>
+            </div>
+
+            <div class="feed-main">
+              <div class="user-row">
+                <div class="user-name">${escapeHtml(senderText)}</div>
+                <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
+                ${openedBadge}
+                <div class="meta-chip">${escapeHtml(domainText || "-")}</div>
+              </div>
+
+              <div class="link-line">
+                ${
+                  firstLink
+                    ? `<a href="/links/open/${row.id}" target="_blank">${escapeHtml(firstLink)}</a>`
+                    : `<span class="muted">Link bulunamadı</span>`
+                }
+              </div>
+
+              <div class="tools-grid">
+                <form method="POST" action="/links/status/${row.id}" class="inline-form">
+                  <input type="hidden" name="deleted" value="${built.deletedFilter ? "1" : "0"}" />
+                  <select name="status" class="select">
+                    <option ${reviewStatus === "Beklemede" ? "selected" : ""}>Beklemede</option>
+                    <option ${reviewStatus === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
+                    <option ${reviewStatus === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
+                    <option ${reviewStatus === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
+                  </select>
+                  <button type="submit" class="mini-btn">Kaydet</button>
+                </form>
+              </div>
+            </div>
+
+            ${actionArea}
           </div>
         `;
       })
       .join("");
 
-    const whitelistHtml = whitelistResult.rows
-      .map(
-        (row) => `
-        <div class="domain-item">
-          <span>${escapeHtml(row.domain)}</span>
-          <form method="POST" action="/domains/whitelist/delete/${row.id}">
-            <button type="submit" class="domain-del">Sil</button>
-          </form>
-        </div>
-      `
-      )
-      .join("");
-
-    const blacklistHtml = blacklistResult.rows
-      .map(
-        (row) => `
-        <div class="domain-item">
-          <span>${escapeHtml(row.domain)}</span>
-          <form method="POST" action="/domains/blacklist/delete/${row.id}">
-            <button type="submit" class="domain-del">Sil</button>
-          </form>
-        </div>
-      `
-      )
-    
     const currentQuery = {
       search: built.search,
       status: built.statusFilter,
@@ -1710,6 +1401,26 @@ app.get("/links", requireAuth, async (req, res) => {
       per_page: built.perPage,
       sort: built.sort,
     };
+
+    const bulkButtons = built.deletedFilter
+      ? `
+        <button class="bulk-btn" type="submit" name="action" value="restore">Seçilileri Geri Al</button>
+        <button class="bulk-btn danger-bulk" type="submit" name="action" value="destroy">Seçilileri Kalıcı Sil</button>
+      `
+      : `
+        <button class="bulk-btn" type="submit" name="action" value="approve">Seçilileri Onayla</button>
+        <button class="bulk-btn" type="submit" name="action" value="review">Seçilileri İncele</button>
+        <button class="bulk-btn" type="submit" name="action" value="reject">Seçilileri Reddet</button>
+        <button class="bulk-btn" type="submit" name="action" value="delete">Seçilileri Çöpe Taşı</button>
+      `;
+
+    const trashPanelExtra = built.deletedFilter
+      ? `
+        <form method="POST" action="/trash/empty" onsubmit="return confirm('Çöpteki tüm kayıtları kalıcı olarak silmek istiyor musun?')">
+          <button class="bulk-btn danger-bulk" type="submit">Çöpü Tamamen Boşalt</button>
+        </form>
+      `
+      : "";
 
     res.send(`
       <html>
@@ -1725,7 +1436,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 14px;
               padding: 14px;
             }
-
             .sidebar {
               width: 76px;
               border-radius: 24px;
@@ -1735,17 +1445,12 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               gap: 12px;
             }
-
             .side-logo {
               width: 48px;
               height: 48px;
               border-radius: 50%;
               object-fit: cover;
-              border: 1px solid rgba(255,255,255,0.08);
-              box-shadow: 0 0 22px rgba(255, 216, 77, 0.26);
-              background: #111;
             }
-
             .side-btn {
               width: 44px;
               height: 44px;
@@ -1754,30 +1459,23 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               justify-content: center;
               font-size: 15px;
-              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+              background: linear-gradient(180deg, #101b2b, #0a1320);
+              border: 1px solid rgba(92, 117, 164, 0.24);
+              color: white;
             }
-
-            .side-btn:hover {
-              transform: translateY(-2px);
-              border-color: rgba(255, 221, 87, 0.30);
-              box-shadow: 0 8px 18px rgba(0,0,0,0.28);
-            }
-
             .side-btn.active {
-              font-weight: bold;
-              box-shadow:
-                0 0 18px rgba(250, 204, 21, 0.24),
-                inset 0 1px 0 rgba(255,255,255,0.25);
+              background: linear-gradient(135deg, #ffe37a, #facc15);
+              color: #0b1b44;
+              border: none;
+              font-weight: 700;
             }
-
             .content {
               flex: 1;
               display: grid;
-              grid-template-columns: 1fr 340px;
+              grid-template-columns: 1fr 330px;
               gap: 14px;
             }
-
-            .topbar, .search-panel, .filter-panel, .bulk-panel, .feed-card, .right-card, .sidebar {
+            .topbar, .search-panel, .bulk-panel, .feed-card, .right-card, .sidebar {
               background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
               border: 1px solid rgba(102, 126, 173, 0.22);
               box-shadow:
@@ -1785,7 +1483,6 @@ app.get("/links", requireAuth, async (req, res) => {
                 inset 0 1px 0 rgba(255, 255, 255, 0.03);
               backdrop-filter: blur(10px);
             }
-
             .topbar {
               border-radius: 24px;
               padding: 18px 22px;
@@ -1794,107 +1491,63 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               gap: 16px;
               margin-bottom: 16px;
-              position: relative;
-              overflow: hidden;
             }
-
-            .topbar::before {
-              content: "";
-              position: absolute;
-              inset: 0;
-              background: linear-gradient(90deg, rgba(255, 221, 87, 0.04), transparent 35%, rgba(59, 130, 246, 0.05));
-              pointer-events: none;
-            }
-
             .brand-title {
               font-size: 18px;
               font-weight: 700;
-              margin-bottom: 3px;
-              text-shadow: 0 0 16px rgba(255, 221, 87, 0.08);
+              margin-bottom: 4px;
             }
-
             .brand-sub {
               color: #c8d4ef;
               font-size: 12px;
-              letter-spacing: 0.2px;
             }
-
             .top-actions {
               display: flex;
               gap: 10px;
               flex-wrap: wrap;
               align-items: center;
-              justify-content: flex-end;
             }
-
             .stat-pill {
-              min-width: 108px;
+              min-width: 102px;
               background: linear-gradient(180deg, #0e1828, #091321);
               border: 1px solid rgba(96, 120, 168, 0.24);
               border-radius: 18px;
               padding: 11px 15px;
               text-align: center;
-              box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
             }
-
             .stat-label {
               color: #7b8aa8;
               font-size: 11px;
               margin-bottom: 3px;
-              letter-spacing: 0.2px;
             }
-
             .stat-value {
               font-size: 22px;
               font-weight: 800;
-              letter-spacing: 0.2px;
             }
-
-            .top-btn, .side-btn, .mini-panel-btn {
+            .top-btn, .mini-panel-btn {
               background: linear-gradient(180deg, #101b2b, #0a1320);
               border: 1px solid rgba(92, 117, 164, 0.24);
               color: white;
               border-radius: 14px;
               padding: 10px 15px;
               font-weight: 700;
-              transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
-
-            .top-btn:hover, .mini-panel-btn:hover {
-              transform: translateY(-2px);
-              box-shadow: 0 10px 20px rgba(0,0,0,0.24);
-              border-color: rgba(255, 221, 87, 0.24);
-            }
-
-            .top-btn.green, .side-btn.active {
+            .top-btn.green {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: none;
             }
-
-            .search-panel, .filter-panel, .bulk-panel, .right-card {
+            .search-panel, .bulk-panel, .right-card {
               border-radius: 22px;
               padding: 18px;
               margin-bottom: 12px;
-              position: relative;
-              overflow: hidden;
             }
-
-            .right-card::before {
-              content: "";
-              position: absolute;
-              inset: 0;
-              background: linear-gradient(90deg, rgba(255,255,255,0.015), transparent 45%, rgba(255,221,87,0.02));
-              pointer-events: none;
-            }
-
-            .search-row, .chip-row {
+            .search-row {
               display: flex;
               gap: 10px;
               flex-wrap: wrap;
               align-items: center;
             }
-
             .search-box {
               flex: 1;
               min-width: 260px;
@@ -1905,185 +1558,122 @@ app.get("/links", requireAuth, async (req, res) => {
               border: 1px solid rgba(96, 120, 168, 0.22);
               border-radius: 16px;
               padding: 12px 14px;
-              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
-
-            .search-input, .select, .note-input {
-  background: linear-gradient(180deg, #0a1524, #07111c);
-  border: 1px solid rgba(96, 120, 168, 0.22);
-  outline: none;
-  color: white;
-  font-size: 14px;
-  border-radius: 14px;
-  padding: 10px 12px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-}
-
-.select option {
-  color: black;
-  background: white;
-}
-
+            .search-input, .select, .side-input {
+              background: linear-gradient(180deg, #0a1524, #07111c);
+              border: 1px solid rgba(96, 120, 168, 0.22);
+              outline: none;
+              color: white;
+              font-size: 14px;
+              border-radius: 14px;
+              padding: 10px 12px;
+            }
             .search-input {
               flex: 1;
-              background: transparent;
               border: none;
+              background: transparent;
               padding: 0;
-              box-shadow: none;
             }
-
-            .select:focus, .note-input:focus {
-              border-color: rgba(255, 221, 87, 0.28);
-              box-shadow: 0 0 0 3px rgba(255, 221, 87, 0.08);
+            .select option {
+              color: black;
+              background: white;
             }
-
-            .search-btn, .clear-btn, .mini-btn, .bulk-btn, .domain-btn, .domain-del {
+            .search-btn, .clear-btn, .mini-btn, .bulk-btn, .domain-btn, .small-del {
               border: none;
               cursor: pointer;
               border-radius: 12px;
               padding: 10px 12px;
               font-weight: 700;
             }
-
             .search-btn, .mini-btn, .bulk-btn, .domain-btn {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: 1px solid rgba(255, 216, 77, 0.35);
-              transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
             }
-
-            .search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
-              transform: translateY(-2px);
-              box-shadow: 0 10px 20px rgba(0,0,0,0.22);
-              filter: brightness(1.04);
-            }
-
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
               border: 1px solid rgba(73, 95, 130, 0.35);
             }
-
-            .domain-del {
+            .danger-bulk {
               background: rgba(220, 38, 38, 0.16);
               color: #ffb4b4;
+              border: 1px solid rgba(220, 38, 38, 0.24);
             }
-
-            .chip {
-              padding: 9px 13px;
-              border-radius: 999px;
-              background: linear-gradient(180deg, #0f1b2d, #091321);
-              border: 1px solid rgba(92, 117, 164, 0.22);
-              font-size: 12px;
-              color: #b6c4df;
-              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-            }
-
-            .chip.green { color: #79f0b6; border-color: rgba(13, 207, 131, 0.35); }
-            .chip.pink { color: #f4a5d6; border-color: rgba(255, 95, 162, 0.35); }
-            .chip.orange { color: #ffc078; border-color: rgba(255, 160, 60, 0.35); }
-            .chip.blue { color: #88c7ff; border-color: rgba(72, 163, 255, 0.35); }
-
             .bulk-panel form {
               display: flex;
               gap: 10px;
               flex-wrap: wrap;
               align-items: center;
             }
-
             .feed-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
+              display: flex;
+              flex-direction: column;
+              gap: 16px;
+            }
             .feed-card {
-  width: 100%;
-  border-radius: 20px;
-  padding: 18px;
-  display: grid;
-  grid-template-columns: 170px minmax(0, 1fr) 100px;
-  gap: 16px;
-  align-items: start;
-  overflow: hidden;
-}
-
-.feed-main {
-  min-width: 0;
-}
-            .feed-card:hover {
-              transform: translateY(-2px);
-              border-color: rgba(255, 221, 87, 0.18);
-              box-shadow:
-                0 20px 40px rgba(0,0,0,0.30),
-                inset 0 1px 0 rgba(255,255,255,0.03);
+              width: 100%;
+              border-radius: 20px;
+              padding: 18px;
+              display: grid;
+              grid-template-columns: 170px minmax(0, 1fr) 120px;
+              gap: 16px;
+              align-items: start;
+              overflow: hidden;
             }
-
-            .priority-card {
-              border-color: rgba(250, 204, 21, 0.28);
-              box-shadow:
-                0 18px 40px rgba(0, 0, 0, 0.32),
-                inset 0 0 0 1px rgba(250, 204, 21, 0.08);
-            }
-
             .feed-left {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  min-width: 0;
-}
-
+              display: flex;
+              gap: 10px;
+              align-items: flex-start;
+              min-width: 0;
+            }
+            .feed-main {
+              min-width: 0;
+            }
+            .feed-actions {
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+              justify-content: flex-start;
+              align-items: flex-end;
+            }
             .bulk-checkbox {
               width: 18px;
               height: 18px;
               accent-color: #facc15;
             }
-
             .dot {
               width: 12px;
               height: 12px;
               border-radius: 999px;
               margin-top: 2px;
-              box-shadow: 0 0 14px currentColor;
             }
-
-            .dot-0 { color: #7c3aed; background: #7c3aed; }
-            .dot-1 { color: #06b6d4; background: #06b6d4; }
-            .dot-2 { color: #22c55e; background: #22c55e; }
-            .dot-3 { color: #f97316; background: #f97316; }
-            .dot-4 { color: #ec4899; background: #ec4899; }
-
+            .dot-0 { background: #7c3aed; }
+            .dot-1 { background: #06b6d4; }
+            .dot-2 { background: #22c55e; }
+            .dot-3 { background: #f97316; }
+            .dot-4 { background: #ec4899; }
             .time {
-  font-size: 12px;
-  color: #cbd5e1;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.subtime {
-  font-size: 11px;
-  color: #64748b;
-}
-
-            .user-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-            .user-name { font-weight: 700; font-size: 15px; }
-
-            .user-badge {
-              padding: 5px 9px;
-              border-radius: 999px;
-              background: rgba(255, 216, 77, 0.12);
-              border: 1px solid rgba(255, 216, 77, 0.32);
-              color: #ffe27a;
-              font-size: 11px;
-              font-weight: 700;
+              font-size: 12px;
+              color: #cbd5e1;
+              font-weight: 600;
+              line-height: 1.4;
             }
-
+            .subtime {
+              font-size: 11px;
+              color: #64748b;
+            }
+            .user-row {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+              margin-bottom: 10px;
+            }
+            .user-name {
+              font-weight: 700;
+              font-size: 18px;
+            }
             .badge-lite {
               padding: 5px 9px;
               border-radius: 999px;
@@ -2091,37 +1681,6 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               border: 1px solid transparent;
             }
-
-            .priority-badge {
-              background: rgba(250, 204, 21, 0.14);
-              color: #fde68a;
-              border-color: rgba(250, 204, 21, 0.28);
-            }
-
-            .risk-normal { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
-            .risk-mid { background: rgba(249, 115, 22, 0.12); color: #fdba74; border-color: rgba(249, 115, 22, 0.25); }
-            .risk-high { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
-            .risk-invite { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
-            .risk-whitelist { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.25); }
-
-            .status-approved { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
-            .status-rejected { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
-            .status-pending { background: rgba(234, 179, 8, 0.12); color: #fde68a; border-color: rgba(234, 179, 8, 0.25); }
-            .status-review { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
-
-.opened-badge {
-  background: rgba(220, 38, 38, 0.14);
-  color: #fca5a5;
-  border-color: rgba(220, 38, 38, 0.28);
-}
-
-            .meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
             .meta-chip {
               font-size: 11px;
               background: #0c1624;
@@ -2130,165 +1689,89 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 6px 10px;
               color: #b5c6e7;
             }
-
-            .message-line {
-  color: #e9f1ff;
-  font-size: 14px;
-  margin-bottom: 8px;
-  word-break: break-word;
-}
-
+            .status-approved { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
+            .status-rejected { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
+            .status-pending { background: rgba(234, 179, 8, 0.12); color: #fde68a; border-color: rgba(234, 179, 8, 0.25); }
+            .status-review { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
+            .opened-badge { background: rgba(220, 38, 38, 0.14); color: #fca5a5; border-color: rgba(220, 38, 38, 0.28); }
             .link-line {
-  min-width: 0;
-}
-
-.link-line a {
-  color: #7dd3fc;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.6;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-            .extra-links {
-              margin-top: 10px;
-              display: flex;
-              flex-wrap: wrap;
-              gap: 8px;
+              min-width: 0;
+              margin-bottom: 14px;
             }
-
-            .mini-link {
-              font-size: 11px;
-              color: #b5c6e7;
-              background: #0c1624;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              border-radius: 999px;
-              padding: 6px 10px;
+            .link-line a {
+              color: #7dd3fc;
+              font-size: 15px;
+              font-weight: 700;
+              line-height: 1.6;
+              word-break: break-word;
+              overflow-wrap: anywhere;
             }
-
             .tools-grid {
-  display: block;
-  margin-top: 14px;
-}
-
+              display: block;
+              margin-top: 14px;
+            }
             .inline-form {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-            .note-input {
-              flex: 1;
-              min-width: 180px;
+              display: flex;
+              gap: 8px;
+              flex-wrap: wrap;
+              align-items: center;
             }
-
-            .feed-actions {
-    justify-content: flex-start;
-}
-
-            .feed-actions form { margin: 0; }
-
             .icon-btn {
-  min-width: 56px;
-  height: 38px;
-  border-radius: 12px;
-  border: 1px solid rgba(73, 95, 130, 0.25);
-  background: #101827;
-  color: #dce8ff !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0 14px;
-}
-
+              min-width: 72px;
+              height: 38px;
+              border-radius: 12px;
+              border: 1px solid rgba(73, 95, 130, 0.25);
+              background: #101827;
+              color: #dce8ff !important;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-weight: 700;
+              cursor: pointer;
+              padding: 0 14px;
+            }
             .icon-btn.danger {
-  background: rgba(220, 38, 38, 0.12);
-  color: #fca5a5 !important;
-  border-color: rgba(220, 38, 38, 0.22);
-}
-
+              background: rgba(220, 38, 38, 0.12);
+              color: #fca5a5 !important;
+              border-color: rgba(220, 38, 38, 0.22);
+            }
             .icon-btn.restore {
-              color: #9ae6b4 !important;
-              border-color: rgba(34, 197, 94, 0.35);
+              background: rgba(34, 197, 94, 0.12);
+              color: #86efac !important;
+              border-color: rgba(34, 197, 94, 0.22);
             }
-
-            .icon-btn.priority-icon {
-              color: #fde68a !important;
-              border-color: rgba(250, 204, 21, 0.30);
-            }
-
-            .empty-box {
-              border-radius: 22px;
-              padding: 34px 26px;
-              color: #a8b7d2;
-              text-align: center;
-            }
-
             .right {
               display: flex;
               flex-direction: column;
               gap: 14px;
             }
-
-            .right-card {
-              border-radius: 22px;
-              padding: 18px;
-              position: relative;
-              overflow: hidden;
-            }
-
-            .right-card::before {
-              content: "";
-              position: absolute;
-              inset: 0;
-              background: linear-gradient(90deg, rgba(255,255,255,0.015), transparent 45%, rgba(255,221,87,0.02));
-              pointer-events: none;
-            }
-
             .right-title {
               font-size: 13px;
               color: #8fa0bf;
               margin-bottom: 12px;
-              letter-spacing: 0.2px;
             }
-
             .panel-buttons {
               display: grid;
               grid-template-columns: repeat(2, 1fr);
               gap: 10px;
             }
-
-            .domain-list, .audit-list {
-              display: flex;
-              flex-direction: column;
-              gap: 8px;
-              margin-top: 12px;
-            }
-
-            .domain-item, .audit-item {
+            .list-item, .audit-item {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
               border-radius: 12px;
               padding: 10px;
-              transition: transform 0.16s ease, border-color 0.16s ease;
             }
-
-            .audit-item:hover, .domain-item:hover {
-              transform: translateY(-1px);
-              border-color: rgba(255, 221, 87, 0.16);
-            }
-
-            .domain-item {
+            .list-item {
               display: flex;
               justify-content: space-between;
               align-items: center;
               gap: 8px;
+              margin-top: 8px;
             }
-
+            .small-del {
+              background: rgba(220, 38, 38, 0.16);
+              color: #ffb4b4;
+            }
             .audit-top {
               display: flex;
               justify-content: space-between;
@@ -2296,56 +1779,29 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 12px;
               margin-bottom: 6px;
             }
-
             .audit-bottom {
               color: #c9d7ef;
               font-size: 12px;
               word-break: break-word;
             }
-
-.opened-badge {
-  background: rgba(220, 38, 38, 0.14);
-  color: #fca5a5;
-  border-color: rgba(220, 38, 38, 0.28);
-}
-
-            .domain-stat-list {
-              display: flex;
-              flex-direction: column;
-              gap: 8px;
-              margin-top: 10px;
+            .empty-box {
+              border-radius: 22px;
+              padding: 34px 26px;
+              color: #a8b7d2;
+              text-align: center;
             }
-
-            .domain-stat-row {
-              display: flex;
-              justify-content: space-between;
-              gap: 8px;
-              padding: 10px 12px;
-              border-radius: 12px;
-              background: #0b1421;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              font-size: 13px;
-            }
-
-            .pagination {
-              display: flex;
-              gap: 10px;
-              flex-wrap: wrap;
-              align-items: center;
-              margin-top: 14px;
-            }
-
             @media (max-width: 1250px) {
               .content { grid-template-columns: 1fr; }
               .right { order: -1; }
             }
-
             @media (max-width: 1100px) {
-  .feed-card {
-    grid-template-columns: 1fr;
-  }
+              .feed-card { grid-template-columns: 1fr; }
+              .feed-actions {
+                flex-direction: row;
+                justify-content: flex-start;
+                align-items: flex-start;
+              }
             }
-
             @media (max-width: 800px) {
               .app-shell { display: block; padding: 10px; }
               .sidebar {
@@ -2404,16 +1860,10 @@ app.get("/links", requireAuth, async (req, res) => {
                   <form class="search-row" method="GET" action="/links">
                     <div class="search-box">
                       <span>⌕</span>
-                      <input
-                        class="search-input"
-                        type="text"
-                        name="search"
-                        placeholder="Link, mesaj, kullanıcı adı veya domain ara..."
-                        value="${escapeHtml(built.search)}"
-                      />
+                      <input class="search-input" type="text" name="search" placeholder="Link, mesaj, kullanıcı adı veya domain ara..." value="${escapeHtml(built.search)}" />
                     </div>
 
-                    <input class="select" type="text" name="domain" placeholder="domain filtrele" value="${escapeHtml(built.domainFilter)}" />
+                    <input class="side-input" type="text" name="domain" placeholder="domain filtrele" value="${escapeHtml(built.domainFilter)}" />
 
                     <select class="select" name="status">
                       <option value="">Tüm Durumlar</option>
@@ -2441,7 +1891,6 @@ app.get("/links", requireAuth, async (req, res) => {
                     <select class="select" name="sort">
                       <option value="newest" ${built.sort === "newest" ? "selected" : ""}>En yeni</option>
                       <option value="oldest" ${built.sort === "oldest" ? "selected" : ""}>En eski</option>
-                      <option value="risk" ${built.sort === "risk" ? "selected" : ""}>Risk</option>
                       <option value="domain" ${built.sort === "domain" ? "selected" : ""}>Domain</option>
                       <option value="status" ${built.sort === "status" ? "selected" : ""}>Durum</option>
                     </select>
@@ -2454,11 +1903,10 @@ app.get("/links", requireAuth, async (req, res) => {
 
                 <div class="bulk-panel">
                   <form id="bulkForm" method="POST" action="/links/bulk-action">
+                    <input type="hidden" name="deleted" value="${built.deletedFilter ? "1" : "0"}" />
                     <label class="pill"><input id="selectAll" type="checkbox"> Tümünü Seç</label>
-                    <button class="bulk-btn" type="submit" name="action" value="approve">Seçilileri Onayla</button>
-                    <button class="bulk-btn" type="submit" name="action" value="review">Seçilileri İncele</button>
-                    <button class="bulk-btn" type="submit" name="action" value="reject">Seçilileri Reddet</button>
-                    <button class="bulk-btn" type="submit" name="action" value="delete">Seçilileri Çöpe Taşı</button>
+                    ${bulkButtons}
+                    ${trashPanelExtra}
                   </form>
                 </div>
 
@@ -2468,10 +1916,9 @@ app.get("/links", requireAuth, async (req, res) => {
                     : `<div class="empty-box glass">Bu filtreye uyan kayıt yok.</div>`
                 }
 
-                <div class="pagination">
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px;">
                   <a class="top-btn" href="/links${buildQuery(currentQuery, { page: Math.max(safePage - 1, 1) })}">Önceki</a>
                   <span class="pill">Sayfa ${safePage} / ${totalPages}</span>
-                  <span class="pill">Son kayıt: ${escapeHtml(lastRecordAt)}</span>
                   <a class="top-btn" href="/links${buildQuery(currentQuery, { page: Math.min(safePage + 1, totalPages) })}">Sonraki</a>
                   <a class="top-btn" href="/links/json${buildQuery(currentQuery)}">Filtreli JSON</a>
                   <a class="top-btn" href="/links/export/csv${buildQuery(currentQuery)}">Filtreli CSV</a>
@@ -2483,69 +1930,44 @@ app.get("/links", requireAuth, async (req, res) => {
                   <div class="right-title">Hızlı Erişim</div>
                   <div class="panel-buttons">
                     <a class="mini-panel-btn" href="/links">Liste</a>
+                    <a class="mini-panel-btn" href="/links?status=Reddedildi">Redler</a>
                     <a class="mini-panel-btn" href="/links/json${buildQuery(currentQuery)}">JSON</a>
                     <a class="mini-panel-btn" href="/links/export/csv${buildQuery(currentQuery)}">CSV</a>
-                    <a class="mini-panel-btn" href="/find/broadcaster">Kick</a>
                     <a class="mini-panel-btn" href="/audit">Audit</a>
-                    <a class="mini-panel-btn" href="/links?status=Reddedildi">Redler</a>
-                  </div>
-                </div>
-
-                <div class="right-card glass">
-                  <div class="right-title">Durum</div>
-                  <div class="chip-row">
-                    <div class="chip green">Render Aktif</div>
-                    <div class="chip blue">DB Bağlı</div>
-                    <a class="chip pink" href="/subscribe/chat">Webhook Bekliyor</a>
-                    <div class="chip orange">Çöp: ${deletedCount}</div>
-                  </div>
-                </div>
-
-                <div class="right-card glass">
-                  <div class="right-title">Domain İstatistikleri</div>
-                  <div class="domain-stat-list">
-                    ${domainStatsHtml || `<div class="domain-item">Henüz domain verisi yok.</div>`}
+                    <a class="mini-panel-btn" href="/subscribe/chat">Sub</a>
                   </div>
                 </div>
 
                 <div class="right-card glass">
                   <div class="right-title">Whitelist Domain</div>
                   <form class="inline-form" method="POST" action="/domains/whitelist">
-                    <input class="note-input" type="text" name="domain" placeholder="ör: youtube.com" />
+                    <input class="side-input" type="text" name="domain" placeholder="ör: youtube.com" />
                     <button class="domain-btn" type="submit">Ekle</button>
                   </form>
-                  <div class="domain-list">
-                    ${whitelistHtml || `<div class="audit-item">Henüz whitelist domain yok.</div>`}
-                  </div>
+                  ${whitelistHtml || `<div class="list-item"><span>Henüz whitelist yok.</span></div>`}
                 </div>
 
                 <div class="right-card glass">
                   <div class="right-title">Blacklist Domain</div>
                   <form class="inline-form" method="POST" action="/domains/blacklist">
-                    <input class="note-input" type="text" name="domain" placeholder="ör: spam-site.com" />
+                    <input class="side-input" type="text" name="domain" placeholder="ör: spam-site.com" />
                     <button class="domain-btn" type="submit">Ekle</button>
                   </form>
-                  <div class="domain-list">
-                    ${blacklistHtml || `<div class="audit-item">Henüz blacklist domain yok.</div>`}
-                  </div>
+                  ${blacklistHtml || `<div class="list-item"><span>Henüz blacklist yok.</span></div>`}
                 </div>
 
                 <div class="right-card glass">
                   <div class="right-title">Engelli Kullanıcılar</div>
                   <form class="inline-form" method="POST" action="/users/block">
-                    <input class="note-input" type="text" name="username" placeholder="ör: botrix" />
+                    <input class="side-input" type="text" name="username" placeholder="ör: botrix" />
                     <button class="domain-btn" type="submit">Ekle</button>
                   </form>
-                  <div class="domain-list">
-                    ${blockedUsersHtml || `<div class="audit-item">Henüz engelli kullanıcı yok.</div>`}
-                  </div>
+                  ${blockedUsersHtml || `<div class="list-item"><span>Henüz engelli kullanıcı yok.</span></div>`}
                 </div>
 
                 <div class="right-card glass">
                   <div class="right-title">Son İşlemler</div>
-                  <div class="audit-list">
-                    ${auditHtml || `<div class="audit-item">Henüz işlem yok.</div>`}
-                  </div>
+                  ${auditHtml || `<div class="list-item"><span>Henüz işlem yok.</span></div>`}
                 </div>
               </div>
             </div>
@@ -2562,28 +1984,22 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             let latestKnownId = 0;
-
-            const idMatches = [...document.querySelectorAll(".user-badge")]
+            const idMatches = [...document.querySelectorAll(".subtime")]
               .map((el) => {
-                const match = (el.textContent || "").match(/ID\\s+(\\d+)/);
+                const match = (el.textContent || "").match(/#(\\d+)/);
                 return match ? Number(match[1]) : 0;
               })
               .filter(Boolean);
 
-            if (idMatches.length) {
-              latestKnownId = Math.max(...idMatches);
-            }
+            if (idMatches.length) latestKnownId = Math.max(...idMatches);
 
             async function checkLiveUpdates() {
               try {
                 const res = await fetch("/links/live?last_id=" + latestKnownId, {
                   credentials: "same-origin"
                 });
-
                 if (!res.ok) return;
-
                 const rows = await res.json();
-
                 if (Array.isArray(rows) && rows.length > 0) {
                   const newestId = Math.max(...rows.map((r) => Number(r.id || 0)));
                   if (newestId > latestKnownId) {
@@ -2611,7 +2027,6 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
   console.log(`Server ${PORT} portunda çalışıyor`);
-
   try {
     await ensureTables();
     console.log("Tablolar hazır");
