@@ -1980,12 +1980,16 @@ app.get("/links", requireAuth, async (req, res) => {
   border-radius: 20px;
   padding: 20px;
   display: grid;
-  grid-template-columns: 140px 1fr 70px;
+  grid-template-columns: 170px minmax(0, 1fr) 90px;
   gap: 16px;
   align-items: start;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  overflow: hidden;
 }
 
+.feed-main {
+  min-width: 0;
+}
             .feed-card:hover {
               transform: translateY(-2px);
               border-color: rgba(255, 221, 87, 0.18);
@@ -2112,11 +2116,16 @@ app.get("/links", requireAuth, async (req, res) => {
               word-break: break-word;
             }
 
-            .link-line a {
+            .link-line {
+  min-width: 0;
+}
+
+.link-line a {
   color: #7dd3fc;
   font-size: 15px;
   font-weight: 700;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   line-height: 1.6;
 }
 
@@ -2156,11 +2165,10 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-actions {
-              display: flex;
-              flex-direction: column;
-              gap: 10px;
-              align-items: flex-end;
-            }
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
 
             .feed-actions form { margin: 0; }
 
