@@ -1876,15 +1876,20 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .search-input, .select, .note-input {
-              background: linear-gradient(180deg, #0a1524, #07111c);
-              border: 1px solid rgba(96, 120, 168, 0.22);
-              outline: none;
-              color: white;
-              font-size: 14px;
-              border-radius: 14px;
-              padding: 10px 12px;
-              box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-            }
+  background: linear-gradient(180deg, #0a1524, #07111c);
+  border: 1px solid rgba(96, 120, 168, 0.22);
+  outline: none;
+  color: white;
+  font-size: 14px;
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+.select option {
+  color: black;
+  background: white;
+}
 
             .search-input {
               flex: 1;
@@ -2388,22 +2393,10 @@ app.get("/links", requireAuth, async (req, res) => {
                   </form>
                 </div>
 
-                <div class="filter-panel">
-                  <div class="chip-row">
-                    <a class="chip" href="/links">Tüm Linkler</a>
-                    <a class="chip blue" href="/links?search=fenerbahçe">#fenerbahçe</a>
-                    <a class="chip green" href="/links?search=futbol">#futbol</a>
-                    <a class="chip blue" href="/links?search=haber">#haber</a>
-                    <a class="chip orange" href="/links?search=yemek">#yemek</a>
-                    <a class="chip pink" href="/links?risk=Şüpheli">#şüpheli</a>
-                    <a class="chip pink" href="/links?risk=Yüksek%20Risk">#yüksek-risk</a>
-                    <a class="chip green" href="/links?status=Onaylandı">#onaylı</a>
-                    <a class="chip pink" href="/links?status=Reddedildi">#reddedilen</a>
-                    <a class="chip blue" href="/links?status=İnceleniyor">#inceleniyor</a>
-                    <a class="chip green" href="/links?status=Onaylandı&per_page=5">#5-onaylı</a>
-                    <a class="chip green" href="/links?status=Onaylandı&per_page=10">#10-onaylı</a>
-                  </div>
-                </div>
+<div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+  <a class="top-btn" href="/links?status=Onaylandı&per_page=5">5 tane onaylı aç</a>
+  <a class="top-btn" href="/links?status=Onaylandı&per_page=10">10 tane onaylı aç</a>
+</div>
 
                 <div class="bulk-panel">
                   <form id="bulkForm" method="POST" action="/links/bulk-action">
