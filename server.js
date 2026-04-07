@@ -985,6 +985,46 @@ app.get("/links/open/:id", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/links/open/:id", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `SELECT id, extracted_links FROM links WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).send("Kayıt bulunamadı");
+    }
+
+    let parsedLinks = [];
+    try {
+      parsedLinks = JSON.parse(result.rows[0].extracted_links || "[]");
+    } catch {
+      parsedLinks = [];
+    }
+
+    const firstLink = parsedLinks[0];
+    if (!firstLink) {
+      return res.status(404).send("Açılacak link bulunamadı");
+    }
+
+    await pool.query(
+      `UPDATE links SET is_opened = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    await logAudit("LINK_OPENED", id, firstLink);
+
+    return res.redirect(firstLink);
+  } catch (error) {
+    res.status(500).send("Link açma hatası: " + error.message);
+  }
+});
+
 app.get("/links/raw/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
@@ -1585,6 +1625,7 @@ app.get("/links", requireAuth, async (req, res) => {
       <div class="user-row">
         <div class="user-name">${escapeHtml(senderText)}</div>
         <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
+        ${openedBadge}
         <div class="meta-chip">${escapeHtml(domainText || "-")}</div>
       </div>
 
@@ -2262,6 +2303,12 @@ app.get("/links", requireAuth, async (req, res) => {
               word-break: break-word;
             }
 
+.opened-badge {
+  background: rgba(220, 38, 38, 0.14);
+  color: #fca5a5;
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
             .domain-stat-list {
               display: flex;
               flex-direction: column;
@@ -2404,11 +2451,6 @@ app.get("/links", requireAuth, async (req, res) => {
                     <a class="clear-btn" href="/links?deleted=1">Çöpü Gör</a>
                   </form>
                 </div>
-
-<div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-  <a class="top-btn" href="/links?status=Onaylandı&per_page=5">5 tane onaylı aç</a>
-  <a class="top-btn" href="/links?status=Onaylandı&per_page=10">10 tane onaylı aç</a>
-</div>
 
                 <div class="bulk-panel">
                   <form id="bulkForm" method="POST" action="/links/bulk-action">
