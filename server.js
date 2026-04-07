@@ -16,6 +16,9 @@ const KICK_CHANNEL_SLUG = process.env.KICK_CHANNEL_SLUG;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const SESSION_SECRET = process.env.SESSION_SECRET;
+const BLOCKED_BOT_USERNAMES = [
+  "botrix"
+];
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -591,7 +594,31 @@ app.post("/webhook/kick", async (req, res) => {
       payload?.data?.message?.content ||
       "";
 
+    const senderUsername =
+      payload?.sender?.username ||
+      payload?.user?.username ||
+      payload?.message?.sender?.username ||
+      payload?.message?.user?.username ||
+      payload?.data?.sender?.username ||
+      payload?.data?.user?.username ||
+      payload?.data?.message?.sender?.username ||
+      payload?.data?.message?.user?.username ||
+      "";
+
     const links = extractLinks(possibleText);
+
+    if (
+      BLOCKED_BOT_USERNAMES.includes(String(senderUsername).toLowerCase()) &&
+      links.length > 0
+    ) {
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        reason: "blocked_bot_link",
+        username: senderUsername
+      });
+    }
+
     const firstDomain = links.length ? getDomain(links[0]) : "";
 
     await ensureTables();
@@ -627,9 +654,17 @@ app.post("/webhook/kick", async (req, res) => {
       ]
     );
 
-    await logAudit("WEBHOOK_INSERT", null, `domain=${firstDomain || ""} risk=${riskLevel}`);
+    await logAudit(
+      "WEBHOOK_INSERT",
+      null,
+      `user=${senderUsername || ""} domain=${firstDomain || ""} risk=${riskLevel}`
+    );
 
-    res.status(200).json({ success: true, found_links: links });
+    res.status(200).json({
+      success: true,
+      found_links: links,
+      username: senderUsername
+    });
   } catch (error) {
     console.error("WEBHOOK ERROR:", error);
     res.status(500).json({ success: false, error: error.message });
