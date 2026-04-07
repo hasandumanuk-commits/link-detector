@@ -606,6 +606,13 @@ app.post("/webhook/kick", async (req, res) => {
       "";
 
     const links = extractLinks(possibleText);
+    if (!links.length) {
+  return res.status(200).json({
+    success: true,
+    skipped: true,
+    reason: "no_link_in_message"
+  });
+}
 
     if (
       BLOCKED_BOT_USERNAMES.includes(String(senderUsername).toLowerCase()) &&
