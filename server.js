@@ -174,6 +174,9 @@ async function ensureTables() {
     )
   `);
 
+  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_opened BOOLEAN DEFAULT FALSE`);
+}
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whitelist_domains (
       id SERIAL PRIMARY KEY,
@@ -703,7 +706,7 @@ app.get("/links/live", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
       FROM links
       WHERE id > $1 AND COALESCE(is_deleted, FALSE) = FALSE
       ORDER BY id ASC
@@ -944,6 +947,46 @@ app.post("/users/block/delete/:id", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/links/open/:id", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `SELECT id, extracted_links FROM links WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).send("Kayıt bulunamadı");
+    }
+
+    let parsedLinks = [];
+    try {
+      parsedLinks = JSON.parse(result.rows[0].extracted_links || "[]");
+    } catch {
+      parsedLinks = [];
+    }
+
+    const firstLink = parsedLinks[0];
+    if (!firstLink) {
+      return res.status(404).send("Açılacak link bulunamadı");
+    }
+
+    await pool.query(
+      `UPDATE links SET is_opened = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    await logAudit("LINK_OPENED", id, firstLink);
+
+    return res.redirect(firstLink);
+  } catch (error) {
+    res.status(500).send("Link açma hatası: " + error.message);
+  }
+});
+
 app.get("/links/raw/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
@@ -1116,7 +1159,7 @@ app.get("/links/json", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
       FROM links
       ${built.whereSql}
       ${built.orderSql}
@@ -1139,7 +1182,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, sender_username, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, is_opened, created_at, updated_at
       FROM links
       ${built.whereSql}
       ${built.orderSql}
@@ -1489,6 +1532,9 @@ app.get("/links", requireAuth, async (req, res) => {
         const riskLevel = row.risk_level || "Normal";
         const reviewStatus = row.review_status || "Beklemede";
         const noteText = row.moderator_note || "";
+        const openedBadge = row.is_opened
+  ? `<div class="badge-lite opened-badge">Açıldı</div>`
+  : "";
         const senderText = row.sender_username || "-";
         const priorityBadge = row.is_priority ? `<div class="badge-lite priority-badge">Öncelikli</div>` : "";
 
@@ -1531,6 +1577,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 ${priorityBadge}
                 <div class="badge-lite ${riskClass}">${escapeHtml(riskLevel)}</div>
                 <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
+                ${openedBadge}
               </div>
 
               <div class="meta-row">
@@ -1544,7 +1591,7 @@ app.get("/links", requireAuth, async (req, res) => {
               <div class="link-line">
                 ${
                   firstLink
-                    ? `<a href="${escapeHtml(firstLink)}" target="_blank">${escapeHtml(firstLink)}</a>`
+                    ? `<a href="/links/open/${row.id}" target="_blank">${escapeHtml(firstLink)}</a>`
                     : `<span class="muted">Link bulunamadı</span>`
                 }
               </div>
@@ -1655,8 +1702,7 @@ app.get("/links", requireAuth, async (req, res) => {
       )
       .join("");
 
-    const blockedUsersHtml = blockedUsersResult.rows
-      .map(
+  <title>HasanD Link Detector</title>    .map(
         (row) => `
           <div class="domain-item">
             <span>${escapeHtml(row.username)}</span>
@@ -2062,6 +2108,12 @@ app.get("/links", requireAuth, async (req, res) => {
             .status-rejected { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
             .status-pending { background: rgba(234, 179, 8, 0.12); color: #fde68a; border-color: rgba(234, 179, 8, 0.25); }
             .status-review { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
+
+.opened-badge {
+  background: rgba(220, 38, 38, 0.14);
+  color: #fca5a5;
+  border-color: rgba(220, 38, 38, 0.28);
+}
 
             .meta-row {
               display: flex;
