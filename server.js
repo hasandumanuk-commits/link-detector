@@ -1634,10 +1634,7 @@ app.get("/links", requireAuth, async (req, res) => {
             <div class="feed-actions">
   <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
     <button type="submit" class="icon-btn danger" title="Sil">Sil</button>
-  </form>
-</div>
-                  `
-              }
+  </form>        
             </div>
           </div>
         `;
