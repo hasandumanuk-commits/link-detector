@@ -4,6 +4,7 @@ const bodyParser = require("body-parser");
 const session = require("express-session");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const path = require("path");
 
 const app = express();
 
@@ -28,9 +29,17 @@ app.use(
       httpOnly: true,
       sameSite: "lax",
       secure: false,
+      maxAge: 1000 * 60 * 60 * 12,
     },
   })
 );
+
+app.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -46,6 +55,19 @@ function requireAuth(req, res, next) {
     return next();
   }
   return res.redirect("/login");
+}
+
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function csvEscape(value) {
+  const s = String(value ?? "");
+  return `"${s.replace(/"/g, '""')}"`;
 }
 
 function base64url(buffer) {
@@ -70,25 +92,56 @@ function extractLinks(text) {
   return matches || [];
 }
 
-function escapeHtml(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function csvEscape(value) {
-  const s = String(value ?? "");
-  return `"${s.replace(/"/g, '""')}"`;
-}
-
 function getDomain(link) {
   try {
     const url = new URL(link);
     return url.hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     return "";
+  }
+}
+
+function detectRisk(links, messageText = "", whitelist = [], blacklist = []) {
+  const domains = (Array.isArray(links) ? links : []).map(getDomain).filter(Boolean);
+  const text = `${messageText} ${(Array.isArray(links) ? links.join(" ") : "")}`.toLowerCase();
+
+  if (domains.some((d) => blacklist.includes(d))) return "Yüksek Risk";
+  if (domains.some((d) => whitelist.includes(d))) return "Whitelist";
+
+  const shorteners = ["bit.ly", "tinyurl", "t.co", "goo.gl", "cutt.ly", "shorturl", "short.io"];
+  const invites = ["discord.gg", "discord.com", "t.me", "telegram.me", "wa.me"];
+  const adultish = ["onlyfans", "porn", "xxx", "escort", "nsfw", "18+"];
+  const suspicious = ["free skin", "nitro", "gift", "airdrop", "casino", "bet", "hack", "crack", "promo"];
+
+  if (adultish.some((k) => text.includes(k))) return "Yüksek Risk";
+  if (domains.some((d) => shorteners.some((s) => d.includes(s)))) return "Şüpheli";
+  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
+  if (domains.some((d) => invites.some((s) => d.includes(s)))) return "Davet Linki";
+
+  return "Normal";
+}
+
+function buildQuery(baseQuery, overrides = {}) {
+  const params = new URLSearchParams();
+  const merged = { ...baseQuery, ...overrides };
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+async function logAudit(actionType, targetId = null, details = "") {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (action_type, target_id, details) VALUES ($1, $2, $3)`,
+      [actionType, targetId, details]
+    );
+  } catch (error) {
+    console.error("AUDIT LOG ERROR:", error);
   }
 }
 
@@ -112,6 +165,7 @@ async function ensureTables() {
       review_status TEXT DEFAULT 'Beklemede',
       moderator_note TEXT,
       is_deleted BOOLEAN DEFAULT FALSE,
+      is_priority BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -150,18 +204,8 @@ async function ensureTables() {
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'Beklemede'`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS moderator_note TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_priority BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
-}
-
-async function logAudit(actionType, targetId = null, details = "") {
-  try {
-    await pool.query(
-      `INSERT INTO audit_logs (action_type, target_id, details) VALUES ($1, $2, $3)`,
-      [actionType, targetId, details]
-    );
-  } catch (error) {
-    console.error("AUDIT LOG ERROR:", error);
-  }
 }
 
 async function getWhitelistDomains() {
@@ -172,26 +216,6 @@ async function getWhitelistDomains() {
 async function getBlacklistDomains() {
   const result = await pool.query(`SELECT domain FROM blacklist_domains ORDER BY domain ASC`);
   return result.rows.map((r) => String(r.domain).toLowerCase());
-}
-
-function detectRisk(links, messageText = "", whitelist = [], blacklist = []) {
-  const domains = (Array.isArray(links) ? links : []).map(getDomain).filter(Boolean);
-  const text = `${messageText} ${(Array.isArray(links) ? links.join(" ") : "")}`.toLowerCase();
-
-  if (domains.some((d) => blacklist.includes(d))) return "Yüksek Risk";
-  if (domains.some((d) => whitelist.includes(d))) return "Whitelist";
-
-  const shorteners = ["bit.ly", "tinyurl", "t.co", "goo.gl", "cutt.ly", "shorturl"];
-  const invites = ["discord.gg", "discord.com", "t.me", "telegram.me", "wa.me"];
-  const adultish = ["onlyfans", "porn", "xxx", "escort", "nsfw", "18+"];
-  const suspicious = ["free skin", "nitro", "gift", "airdrop", "casino", "bet", "hack", "crack"];
-
-  if (adultish.some((k) => text.includes(k))) return "Yüksek Risk";
-  if (domains.some((d) => shorteners.some((s) => d.includes(s)))) return "Şüpheli";
-  if (suspicious.some((k) => text.includes(k))) return "Şüpheli";
-  if (domains.some((d) => invites.some((s) => d.includes(s)))) return "Davet Linki";
-
-  return "Normal";
 }
 
 async function getAppAccessToken() {
@@ -215,8 +239,57 @@ async function getAppAccessToken() {
 
   return tokenData.access_token;
 }
+
+function baseLayoutStyles() {
+  return `
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      color: #f5f7fb;
+      background:
+        radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
+        radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
+        radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
+        linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
+    }
+    a { color: inherit; text-decoration: none; }
+    .glass {
+      background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
+      border: 1px solid rgba(102, 126, 173, 0.22);
+      box-shadow:
+        0 18px 40px rgba(0, 0, 0, 0.32),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+    }
+    .btn-yellow {
+      background: linear-gradient(135deg, #ffe37a, #facc15);
+      color: #0b1b44;
+      border: 1px solid rgba(255, 216, 77, 0.35);
+      box-shadow:
+        0 0 18px rgba(250, 204, 21, 0.18),
+        inset 0 1px 0 rgba(255,255,255,0.20);
+    }
+    .btn-dark {
+      background: linear-gradient(180deg, #101b2b, #0a1320);
+      border: 1px solid rgba(92, 117, 164, 0.24);
+      color: white;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(92, 117, 164, 0.22);
+      background: linear-gradient(180deg, #0f1b2d, #091321);
+    }
+  `;
+}
+
 app.get("/logo.png", (req, res) => {
-  res.sendFile(__dirname + "/logo.png");
+  res.sendFile(path.join(__dirname, "logo.png"));
 });
 
 app.get("/login", (req, res) => {
@@ -232,7 +305,7 @@ app.get("/login", (req, res) => {
         <meta charset="utf-8" />
         <title>Giriş Yap</title>
         <style>
-          * { box-sizing: border-box; }
+          ${baseLayoutStyles()}
           body {
             margin: 0;
             min-height: 100vh;
@@ -240,24 +313,18 @@ app.get("/login", (req, res) => {
             align-items: center;
             justify-content: center;
             font-family: Arial, sans-serif;
+            color: white;
             background:
               radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
               radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
               radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
               linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
-            color: white;
           }
           .card {
             width: 100%;
             max-width: 430px;
-            background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
-            border: 1px solid rgba(102, 126, 173, 0.22);
             border-radius: 26px;
             padding: 30px;
-            box-shadow:
-              0 18px 40px rgba(0, 0, 0, 0.32),
-              inset 0 1px 0 rgba(255, 255, 255, 0.03);
-            backdrop-filter: blur(10px);
           }
           .logo-wrap {
             display: flex;
@@ -265,18 +332,24 @@ app.get("/login", (req, res) => {
             margin-bottom: 18px;
           }
           .logo {
-            width: 86px;
-            height: 86px;
+            width: 90px;
+            height: 90px;
             border-radius: 50%;
             object-fit: cover;
-            box-shadow:
-              0 0 24px rgba(255, 216, 77, 0.18),
-              inset 0 1px 0 rgba(255,255,255,0.12);
             border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 0 24px rgba(255, 216, 77, 0.18);
             background: #111;
           }
-          h1 { margin: 0 0 8px 0; font-size: 30px; text-align: center; }
-          .sub { color: #b7c5e0; margin-bottom: 22px; text-align: center; }
+          h1 {
+            margin: 0 0 8px 0;
+            font-size: 30px;
+            text-align: center;
+          }
+          .sub {
+            color: #b7c5e0;
+            margin-bottom: 22px;
+            text-align: center;
+          }
           .input {
             width: 100%;
             background: linear-gradient(180deg, #0a1524, #07111c);
@@ -294,11 +367,6 @@ app.get("/login", (req, res) => {
             padding: 14px;
             font-weight: 700;
             cursor: pointer;
-            background: linear-gradient(135deg, #ffe37a, #facc15);
-            color: #0b1b44;
-            box-shadow:
-              0 0 18px rgba(250, 204, 21, 0.18),
-              inset 0 1px 0 rgba(255,255,255,0.20);
           }
           .error {
             background: rgba(220, 38, 38, 0.12);
@@ -311,7 +379,7 @@ app.get("/login", (req, res) => {
         </style>
       </head>
       <body>
-        <form class="card" method="POST" action="/login">
+        <form class="card glass" method="POST" action="/login">
           <div class="logo-wrap">
             <img class="logo" src="/logo.png" alt="Logo" />
           </div>
@@ -320,7 +388,7 @@ app.get("/login", (req, res) => {
           ${error ? `<div class="error">${error}</div>` : ""}
           <input class="input" type="text" name="username" placeholder="Kullanıcı adı" required />
           <input class="input" type="password" name="password" placeholder="Şifre" required />
-          <button class="btn" type="submit">Giriş Yap</button>
+          <button class="btn btn-yellow" type="submit">Giriş Yap</button>
         </form>
       </body>
     </html>
@@ -482,19 +550,19 @@ app.get("/subscribe/chat", requireAuth, async (req, res) => {
       events: [
         {
           name: "chat.message.sent",
-          version: 1
-        }
-      ]
+          version: 1,
+        },
+      ],
     };
 
     const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${accessToken}`,
-        "Accept": "application/json"
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     const bodyText = await subRes.text();
@@ -602,7 +670,7 @@ app.post("/links/status/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
     const id = req.params.id;
-    const allowed = ["Onaylandı", "Reddedildi", "Beklemede"];
+    const allowed = ["Onaylandı", "Reddedildi", "Beklemede", "İnceleniyor"];
     const status = allowed.includes(req.body.status) ? req.body.status : "Beklemede";
 
     await pool.query(
@@ -632,6 +700,23 @@ app.post("/links/note/:id", requireAuth, async (req, res) => {
     res.redirect("/links");
   } catch (error) {
     res.status(500).send("Not kaydetme hatası: " + error.message);
+  }
+});
+
+app.post("/links/priority/:id", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+    const id = req.params.id;
+
+    await pool.query(
+      `UPDATE links SET is_priority = NOT COALESCE(is_priority, FALSE), updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    await logAudit("PRIORITY_TOGGLE", Number(id), "priority değişti");
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Öncelik değiştirme hatası: " + error.message);
   }
 });
 
@@ -669,12 +754,24 @@ app.post("/links/bulk-action", requireAuth, async (req, res) => {
         [numericIds]
       );
       await logAudit("BULK_REJECT", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "review") {
+      await pool.query(
+        `UPDATE links SET review_status = 'İnceleniyor', updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_REVIEW", null, `ids=${numericIds.join(",")}`);
     } else if (action === "delete") {
       await pool.query(
         `UPDATE links SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
         [numericIds]
       );
       await logAudit("BULK_DELETE", null, `ids=${numericIds.join(",")}`);
+    } else if (action === "priority") {
+      await pool.query(
+        `UPDATE links SET is_priority = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
+        [numericIds]
+      );
+      await logAudit("BULK_PRIORITY", null, `ids=${numericIds.join(",")}`);
     }
 
     res.redirect("/links");
@@ -748,7 +845,7 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
     const id = req.params.id;
 
     const result = await pool.query(
-      `SELECT id, raw_data, created_at FROM links WHERE id = $1 LIMIT 1`,
+      `SELECT id, raw_data, created_at, updated_at FROM links WHERE id = $1 LIMIT 1`,
       [id]
     );
 
@@ -764,28 +861,20 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
           <meta charset="utf-8" />
           <title>Ham Veri #${row.id}</title>
           <style>
-            body {
-              margin: 0;
-              font-family: Arial, sans-serif;
-              background: #0f1115;
-              color: white;
-              padding: 24px;
-            }
+            ${baseLayoutStyles()}
+            body { padding: 24px; }
             .wrap { max-width: 1000px; margin: 0 auto; }
             .top { margin-bottom: 20px; }
             .btn {
               display: inline-block;
-              background: #8b5cf6;
-              color: white;
               text-decoration: none;
               padding: 10px 14px;
               border-radius: 10px;
               margin-right: 10px;
+              font-weight: 700;
             }
             .card {
-              background: #181c23;
-              border: 1px solid #2b3240;
-              border-radius: 14px;
+              border-radius: 18px;
               padding: 18px;
             }
             pre {
@@ -803,12 +892,13 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
         <body>
           <div class="wrap">
             <div class="top">
-              <a class="btn" href="/links">Panele Dön</a>
-              <a class="btn" href="/">Ana Sayfa</a>
+              <a class="btn btn-yellow" href="/links">Panele Dön</a>
+              <a class="btn btn-dark" href="/">Ana Sayfa</a>
             </div>
-            <div class="card">
+            <div class="card glass">
               <h2>Kayıt #${row.id}</h2>
-              <p>Tarih: ${new Date(row.created_at).toLocaleString("tr-TR")}</p>
+              <p>Oluşturulma: ${new Date(row.created_at).toLocaleString("tr-TR")}</p>
+              <p>Güncellenme: ${new Date(row.updated_at).toLocaleString("tr-TR")}</p>
               <pre>${escapeHtml(row.raw_data)}</pre>
             </div>
           </div>
@@ -824,12 +914,77 @@ app.get("/links/json", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
-    const result = await pool.query(`
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
+    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
+    const deletedFilter = req.query.deleted === "1";
+    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
+    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
+    const hasNote = req.query.has_note === "1";
+
+    const whereParts = [];
+    const values = [];
+    let idx = 1;
+
+    if (search) {
+      whereParts.push(`
+        (
+          CAST(id AS TEXT) ILIKE $${idx}
+          OR COALESCE(message_text, '') ILIKE $${idx}
+          OR COALESCE(extracted_links, '') ILIKE $${idx}
+          OR COALESCE(raw_data, '') ILIKE $${idx}
+          OR COALESCE(link_domain, '') ILIKE $${idx}
+          OR COALESCE(moderator_note, '') ILIKE $${idx}
+        )
+      `);
+      values.push(`%${search}%`);
+      idx++;
+    }
+    if (statusFilter) {
+      whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
+      values.push(statusFilter);
+      idx++;
+    }
+    if (riskFilter) {
+      whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
+      values.push(riskFilter);
+      idx++;
+    }
+    if (domainFilter) {
+      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
+      values.push(`%${domainFilter}%`);
+      idx++;
+    }
+    if (dateFrom) {
+      whereParts.push(`created_at::date >= $${idx}`);
+      values.push(dateFrom);
+      idx++;
+    }
+    if (dateTo) {
+      whereParts.push(`created_at::date <= $${idx}`);
+      values.push(dateTo);
+      idx++;
+    }
+    if (hasNote) {
+      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
+    }
+
+    whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
+    values.push(deletedFilter);
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+    const result = await pool.query(
+      `
+      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
+      ${whereSql}
       ORDER BY id DESC
-      LIMIT 500
-    `);
+      LIMIT 1000
+      `,
+      values
+    );
 
     res.json(result.rows);
   } catch (error) {
@@ -841,12 +996,77 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
-    const result = await pool.query(`
-      SELECT id, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
+    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
+    const deletedFilter = req.query.deleted === "1";
+    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
+    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
+    const hasNote = req.query.has_note === "1";
+
+    const whereParts = [];
+    const values = [];
+    let idx = 1;
+
+    if (search) {
+      whereParts.push(`
+        (
+          CAST(id AS TEXT) ILIKE $${idx}
+          OR COALESCE(message_text, '') ILIKE $${idx}
+          OR COALESCE(extracted_links, '') ILIKE $${idx}
+          OR COALESCE(raw_data, '') ILIKE $${idx}
+          OR COALESCE(link_domain, '') ILIKE $${idx}
+          OR COALESCE(moderator_note, '') ILIKE $${idx}
+        )
+      `);
+      values.push(`%${search}%`);
+      idx++;
+    }
+    if (statusFilter) {
+      whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
+      values.push(statusFilter);
+      idx++;
+    }
+    if (riskFilter) {
+      whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
+      values.push(riskFilter);
+      idx++;
+    }
+    if (domainFilter) {
+      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
+      values.push(`%${domainFilter}%`);
+      idx++;
+    }
+    if (dateFrom) {
+      whereParts.push(`created_at::date >= $${idx}`);
+      values.push(dateFrom);
+      idx++;
+    }
+    if (dateTo) {
+      whereParts.push(`created_at::date <= $${idx}`);
+      values.push(dateTo);
+      idx++;
+    }
+    if (hasNote) {
+      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
+    }
+
+    whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
+    values.push(deletedFilter);
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+    const result = await pool.query(
+      `
+      SELECT id, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
+      ${whereSql}
       ORDER BY id DESC
-      LIMIT 1000
-    `);
+      LIMIT 5000
+      `,
+      values
+    );
 
     const header = [
       "id",
@@ -857,6 +1077,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
       "review_status",
       "moderator_note",
       "is_deleted",
+      "is_priority",
       "created_at",
       "updated_at",
     ].join(",");
@@ -871,6 +1092,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
         csvEscape(row.review_status),
         csvEscape(row.moderator_note),
         csvEscape(row.is_deleted),
+        csvEscape(row.is_priority),
         csvEscape(row.created_at),
         csvEscape(row.updated_at),
       ].join(",")
@@ -886,6 +1108,185 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/audit", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const perPage = Math.min(Math.max(Number(req.query.per_page || 30), 10), 100);
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const actionType = typeof req.query.action_type === "string" ? req.query.action_type.trim() : "";
+
+    const whereParts = [];
+    const values = [];
+    let idx = 1;
+
+    if (search) {
+      whereParts.push(`(COALESCE(action_type, '') ILIKE $${idx} OR COALESCE(details, '') ILIKE $${idx})`);
+      values.push(`%${search}%`);
+      idx++;
+    }
+
+    if (actionType) {
+      whereParts.push(`action_type = $${idx}`);
+      values.push(actionType);
+      idx++;
+    }
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM audit_logs ${whereSql}`,
+      values
+    );
+
+    const total = countResult.rows[0]?.total || 0;
+    const totalPages = Math.max(Math.ceil(total / perPage), 1);
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * perPage;
+
+    const listResult = await pool.query(
+      `
+      SELECT id, action_type, target_id, details, created_at
+      FROM audit_logs
+      ${whereSql}
+      ORDER BY id DESC
+      LIMIT $${idx} OFFSET $${idx + 1}
+      `,
+      [...values, perPage, offset]
+    );
+
+    const baseQuery = {
+      search,
+      action_type: actionType,
+      per_page: perPage,
+    };
+
+    const rowsHtml = listResult.rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${row.id}</td>
+            <td>${escapeHtml(row.action_type)}</td>
+            <td>${row.target_id ?? "-"}</td>
+            <td>${escapeHtml(row.details || "")}</td>
+            <td>${new Date(row.created_at).toLocaleString("tr-TR")}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    res.send(`
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Audit Log</title>
+          <style>
+            ${baseLayoutStyles()}
+            body { padding: 24px; }
+            .wrap { max-width: 1400px; margin: 0 auto; }
+            .card { border-radius: 24px; padding: 20px; }
+            .top {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 12px;
+              margin-bottom: 16px;
+              flex-wrap: wrap;
+            }
+            .title { font-size: 28px; font-weight: 800; }
+            .btn {
+              border: none;
+              border-radius: 12px;
+              padding: 10px 14px;
+              font-weight: 700;
+              cursor: pointer;
+            }
+            .input, .select {
+              background: linear-gradient(180deg, #0a1524, #07111c);
+              border: 1px solid rgba(96, 120, 168, 0.22);
+              outline: none;
+              color: white;
+              font-size: 14px;
+              border-radius: 14px;
+              padding: 10px 12px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              overflow: hidden;
+            }
+            th, td {
+              border-bottom: 1px solid rgba(102, 126, 173, 0.16);
+              padding: 12px;
+              text-align: left;
+              vertical-align: top;
+              font-size: 14px;
+            }
+            th { color: #ffe37a; }
+            .actions {
+              display: flex;
+              gap: 10px;
+              flex-wrap: wrap;
+              margin-top: 16px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="card glass">
+              <div class="top">
+                <div class="title">Audit Log</div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                  <a class="btn btn-yellow" href="/links">Panele Dön</a>
+                  <a class="btn btn-dark" href="/logout">Çıkış</a>
+                </div>
+              </div>
+
+              <form method="GET" action="/audit" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+                <input class="input" type="text" name="search" placeholder="işlem ara" value="${escapeHtml(search)}" />
+                <input class="input" type="text" name="action_type" placeholder="action type" value="${escapeHtml(actionType)}" />
+                <select class="select" name="per_page">
+                  <option value="30" ${perPage === 30 ? "selected" : ""}>30</option>
+                  <option value="50" ${perPage === 50 ? "selected" : ""}>50</option>
+                  <option value="100" ${perPage === 100 ? "selected" : ""}>100</option>
+                </select>
+                <button class="btn btn-yellow" type="submit">Filtrele</button>
+                <a class="btn btn-dark" href="/audit">Temizle</a>
+              </form>
+
+              <div style="overflow:auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>İşlem</th>
+                      <th>Target</th>
+                      <th>Detay</th>
+                      <th>Tarih</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rowsHtml || `<tr><td colspan="5">Kayıt yok.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="actions">
+                <a class="btn btn-dark" href="/audit${buildQuery(baseQuery, { page: Math.max(safePage - 1, 1) })}">Önceki</a>
+                <span class="pill">Sayfa ${safePage} / ${totalPages}</span>
+                <a class="btn btn-dark" href="/audit${buildQuery(baseQuery, { page: Math.min(safePage + 1, totalPages) })}">Sonraki</a>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    res.status(500).send("Audit sayfası hatası: " + error.message);
+  }
+});
+
 app.get("/links", requireAuth, async (req, res) => {
   try {
     await ensureTables();
@@ -898,6 +1299,11 @@ app.get("/links", requireAuth, async (req, res) => {
     const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
     const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
     const autoRefresh = typeof req.query.auto_refresh === "string" ? req.query.auto_refresh.trim() : "0";
+    const hasNote = req.query.has_note === "1";
+    const priorityOnly = req.query.priority === "1";
+    const perPage = Math.min(Math.max(Number(req.query.per_page || 20), 10), 100);
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const sort = typeof req.query.sort === "string" ? req.query.sort.trim() : "newest";
 
     const whereParts = [];
     const values = [];
@@ -948,20 +1354,60 @@ app.get("/links", requireAuth, async (req, res) => {
       idx++;
     }
 
+    if (hasNote) {
+      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
+    }
+
+    if (priorityOnly) {
+      whereParts.push(`COALESCE(is_priority, FALSE) = TRUE`);
+    }
+
     whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
     values.push(deletedFilter);
 
     const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
 
+    let orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id DESC`;
+    if (sort === "oldest") {
+      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id ASC`;
+    } else if (sort === "risk") {
+      orderSql = `
+        ORDER BY
+          COALESCE(is_priority, FALSE) DESC,
+          CASE COALESCE(risk_level, 'Normal')
+            WHEN 'Yüksek Risk' THEN 1
+            WHEN 'Şüpheli' THEN 2
+            WHEN 'Davet Linki' THEN 3
+            WHEN 'Whitelist' THEN 5
+            ELSE 4
+          END ASC,
+          id DESC
+      `;
+    } else if (sort === "domain") {
+      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(link_domain, '') ASC, id DESC`;
+    } else if (sort === "status") {
+      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(review_status, 'Beklemede') ASC, id DESC`;
+    }
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM links ${whereSql}`,
+      values
+    );
+
+    const totalFiltered = countResult.rows[0]?.total || 0;
+    const totalPages = Math.max(Math.ceil(totalFiltered / perPage), 1);
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * perPage;
+
     const result = await pool.query(
       `
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, created_at, updated_at
+      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
       ${whereSql}
-      ORDER BY id DESC
-      LIMIT 100
+      ${orderSql}
+      LIMIT $${idx + 1} OFFSET $${idx + 2}
       `,
-      values
+      [...values, perPage, offset]
     );
 
     const totalCountResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links WHERE COALESCE(is_deleted, FALSE) = FALSE`);
@@ -990,7 +1436,7 @@ app.get("/links", requireAuth, async (req, res) => {
       WHERE COALESCE(is_deleted, FALSE) = FALSE
       GROUP BY link_domain
       ORDER BY total DESC, link_domain ASC
-      LIMIT 1
+      LIMIT 5
     `);
     const recentAuditResult = await pool.query(`
       SELECT id, action_type, target_id, details, created_at
@@ -1010,14 +1456,29 @@ app.get("/links", requireAuth, async (req, res) => {
       ORDER BY domain ASC
       LIMIT 20
     `);
+    const lastRecordResult = await pool.query(`
+      SELECT created_at
+      FROM links
+      WHERE COALESCE(is_deleted, FALSE) = FALSE
+      ORDER BY id DESC
+      LIMIT 1
+    `);
 
     const totalCount = totalCountResult.rows[0]?.total || 0;
     const deletedCount = deletedCountResult.rows[0]?.total || 0;
     const todayCount = todayCountResult.rows[0]?.total || 0;
     const suspiciousCount = suspiciousCountResult.rows[0]?.total || 0;
     const approvedCount = approvedCountResult.rows[0]?.total || 0;
-    const topDomain = domainStatResult.rows[0]?.link_domain || "-";
     const rows = result.rows;
+    const lastRecordAt = lastRecordResult.rows[0]?.created_at
+      ? new Date(lastRecordResult.rows[0].created_at).toLocaleString("tr-TR")
+      : "-";
+
+    const domainStatsHtml = domainStatResult.rows
+      .map(
+        (r) => `<div class="domain-stat-row"><span>${escapeHtml(r.link_domain || "-")}</span><strong>${r.total}</strong></div>`
+      )
+      .join("");
 
     const cards = rows
       .map((row, index) => {
@@ -1035,6 +1496,7 @@ app.get("/links", requireAuth, async (req, res) => {
         const riskLevel = row.risk_level || "Normal";
         const reviewStatus = row.review_status || "Beklemede";
         const noteText = row.moderator_note || "";
+        const priorityBadge = row.is_priority ? `<div class="badge-lite priority-badge">Öncelikli</div>` : "";
 
         const riskClass =
           riskLevel === "Yüksek Risk"
@@ -1052,10 +1514,12 @@ app.get("/links", requireAuth, async (req, res) => {
             ? "status-approved"
             : reviewStatus === "Reddedildi"
             ? "status-rejected"
+            : reviewStatus === "İnceleniyor"
+            ? "status-review"
             : "status-pending";
 
         return `
-          <div class="feed-card">
+          <div class="feed-card ${row.is_priority ? "priority-card" : ""}">
             <div class="feed-left">
               <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
               <div class="dot dot-${index % 5}"></div>
@@ -1069,6 +1533,7 @@ app.get("/links", requireAuth, async (req, res) => {
               <div class="user-row">
                 <div class="user-name">Link Kaydı</div>
                 <div class="user-badge">ID ${row.id}</div>
+                ${priorityBadge}
                 <div class="badge-lite ${riskClass}">${escapeHtml(riskLevel)}</div>
                 <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
               </div>
@@ -1076,6 +1541,7 @@ app.get("/links", requireAuth, async (req, res) => {
               <div class="meta-row">
                 <span class="meta-chip">Domain: ${escapeHtml(domainText || "-")}</span>
                 <span class="meta-chip">Silinmiş: ${row.is_deleted ? "Evet" : "Hayır"}</span>
+                <span class="meta-chip">Güncellendi: ${new Date(row.updated_at).toLocaleString("tr-TR")}</span>
               </div>
 
               <div class="message-line">${escapeHtml(messageText)}</div>
@@ -1108,6 +1574,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 <form method="POST" action="/links/status/${row.id}" class="inline-form">
                   <select name="status" class="select">
                     <option ${reviewStatus === "Beklemede" ? "selected" : ""}>Beklemede</option>
+                    <option ${reviewStatus === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
                     <option ${reviewStatus === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
                     <option ${reviewStatus === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
                   </select>
@@ -1129,6 +1596,11 @@ app.get("/links", requireAuth, async (req, res) => {
 
             <div class="feed-actions">
               <a href="/links/raw/${row.id}" class="icon-btn" title="Ham Veriyi Gör">↗</a>
+              <form method="POST" action="/links/priority/${row.id}">
+                <button type="submit" class="icon-btn priority-icon" title="Öncelik">
+                  ${row.is_priority ? "★" : "☆"}
+                </button>
+              </form>
               ${
                 row.is_deleted
                   ? `
@@ -1193,6 +1665,21 @@ app.get("/links", requireAuth, async (req, res) => {
         ? `<meta http-equiv="refresh" content="${autoRefresh}">`
         : "";
 
+    const currentQuery = {
+      search,
+      status: statusFilter,
+      risk: riskFilter,
+      domain: domainFilter,
+      deleted: deletedFilter ? "1" : "",
+      date_from: dateFrom,
+      date_to: dateTo,
+      auto_refresh: autoRefresh,
+      has_note: hasNote ? "1" : "",
+      priority: priorityOnly ? "1" : "",
+      per_page: perPage,
+      sort,
+    };
+
     res.send(`
       <html>
         <head>
@@ -1200,18 +1687,7 @@ app.get("/links", requireAuth, async (req, res) => {
           ${autoRefreshMeta}
           <title>HasanD Link Detector</title>
           <style>
-            * { box-sizing: border-box; }
-            body {
-              margin: 0;
-              font-family: Arial, sans-serif;
-              color: #f5f7fb;
-              background:
-                radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
-                radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
-                radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
-                linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
-            }
-            a { color: inherit; text-decoration: none; }
+            ${baseLayoutStyles()}
 
             .app-shell {
               display: flex;
@@ -1219,57 +1695,40 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 14px;
               padding: 14px;
             }
-
             .sidebar {
               width: 76px;
-              background: linear-gradient(180deg, rgba(9, 18, 33, 0.95), rgba(6, 12, 24, 0.92));
-              border: 1px solid rgba(102, 126, 173, 0.20);
               border-radius: 24px;
               padding: 16px 10px;
               display: flex;
               flex-direction: column;
               align-items: center;
               gap: 12px;
-              box-shadow:
-                0 18px 40px rgba(0,0,0,0.34),
-                inset 0 1px 0 rgba(255,255,255,0.03);
             }
-
             .side-logo {
               width: 48px;
               height: 48px;
               border-radius: 50%;
               object-fit: cover;
-              box-shadow:
-                0 0 22px rgba(255, 216, 77, 0.26),
-                inset 0 1px 0 rgba(255,255,255,0.25);
               border: 1px solid rgba(255,255,255,0.08);
+              box-shadow: 0 0 22px rgba(255, 216, 77, 0.26);
               background: #111;
             }
-
             .side-btn {
               width: 44px;
               height: 44px;
               border-radius: 16px;
-              border: 1px solid rgba(92, 117, 164, 0.26);
-              background: linear-gradient(180deg, #0c1728, #08111e);
-              color: #d3def5;
               display: flex;
               align-items: center;
               justify-content: center;
               font-size: 15px;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
-
             .side-btn:hover {
               transform: translateY(-2px);
               border-color: rgba(255, 221, 87, 0.30);
               box-shadow: 0 8px 18px rgba(0,0,0,0.28);
             }
-
             .side-btn.active {
-              background: linear-gradient(135deg, #ffe37a, #facc15);
-              color: #0b1b44;
               font-weight: bold;
               box-shadow:
                 0 0 18px rgba(250, 204, 21, 0.24),
@@ -1279,11 +1738,11 @@ app.get("/links", requireAuth, async (req, res) => {
             .content {
               flex: 1;
               display: grid;
-              grid-template-columns: 1fr 320px;
+              grid-template-columns: 1fr 340px;
               gap: 14px;
             }
 
-            .topbar, .search-panel, .filter-panel, .bulk-panel, .feed-card, .right-card {
+            .topbar, .search-panel, .filter-panel, .bulk-panel, .feed-card, .right-card, .sidebar {
               background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
               border: 1px solid rgba(102, 126, 173, 0.22);
               box-shadow:
@@ -1303,7 +1762,6 @@ app.get("/links", requireAuth, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-
             .topbar::before {
               content: "";
               position: absolute;
@@ -1318,7 +1776,6 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 3px;
               text-shadow: 0 0 16px rgba(255, 221, 87, 0.08);
             }
-
             .brand-sub {
               color: #c8d4ef;
               font-size: 12px;
@@ -1342,21 +1799,19 @@ app.get("/links", requireAuth, async (req, res) => {
               text-align: center;
               box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
             }
-
             .stat-label {
               color: #7b8aa8;
               font-size: 11px;
               margin-bottom: 3px;
               letter-spacing: 0.2px;
             }
-
             .stat-value {
               font-size: 22px;
               font-weight: 800;
               letter-spacing: 0.2px;
             }
 
-            .top-btn {
+            .top-btn, .side-btn, .mini-panel-btn {
               background: linear-gradient(180deg, #101b2b, #0a1320);
               border: 1px solid rgba(92, 117, 164, 0.24);
               color: white;
@@ -1365,20 +1820,15 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
-
-            .top-btn:hover {
+            .top-btn:hover, .mini-panel-btn:hover {
               transform: translateY(-2px);
               box-shadow: 0 10px 20px rgba(0,0,0,0.24);
               border-color: rgba(255, 221, 87, 0.24);
             }
-
-            .top-btn.green {
+            .top-btn.green, .side-btn.active {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: none;
-              box-shadow:
-                0 0 18px rgba(250, 204, 21, 0.18),
-                inset 0 1px 0 rgba(255,255,255,0.20);
             }
 
             .search-panel, .filter-panel, .bulk-panel, .right-card {
@@ -1427,7 +1877,6 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 12px;
               box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
-
             .search-input {
               flex: 1;
               background: transparent;
@@ -1435,7 +1884,6 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 0;
               box-shadow: none;
             }
-
             .select:focus, .note-input:focus {
               border-color: rgba(255, 221, 87, 0.28);
               box-shadow: 0 0 0 3px rgba(255, 221, 87, 0.08);
@@ -1448,26 +1896,22 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 12px;
               font-weight: 700;
             }
-
             .search-btn, .mini-btn, .bulk-btn, .domain-btn {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: 1px solid rgba(255, 216, 77, 0.35);
               transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
             }
-
             .search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
               transform: translateY(-2px);
               box-shadow: 0 10px 20px rgba(0,0,0,0.22);
               filter: brightness(1.04);
             }
-
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
               border: 1px solid rgba(73, 95, 130, 0.35);
             }
-
             .domain-del {
               background: rgba(220, 38, 38, 0.16);
               color: #ffb4b4;
@@ -1504,18 +1948,23 @@ app.get("/links", requireAuth, async (req, res) => {
               border-radius: 22px;
               padding: 18px;
               display: grid;
-              grid-template-columns: 190px 1fr 70px;
+              grid-template-columns: 190px 1fr 80px;
               gap: 18px;
               align-items: start;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
-
             .feed-card:hover {
               transform: translateY(-2px);
               border-color: rgba(255, 221, 87, 0.18);
               box-shadow:
                 0 20px 40px rgba(0,0,0,0.30),
                 inset 0 1px 0 rgba(255,255,255,0.03);
+            }
+            .priority-card {
+              border-color: rgba(250, 204, 21, 0.28);
+              box-shadow:
+                0 18px 40px rgba(0, 0, 0, 0.32),
+                inset 0 0 0 1px rgba(250, 204, 21, 0.08);
             }
 
             .feed-left {
@@ -1563,13 +2012,17 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 11px;
               font-weight: 700;
             }
-
             .badge-lite {
               padding: 5px 9px;
               border-radius: 999px;
               font-size: 11px;
               font-weight: 700;
               border: 1px solid transparent;
+            }
+            .priority-badge {
+              background: rgba(250, 204, 21, 0.14);
+              color: #fde68a;
+              border-color: rgba(250, 204, 21, 0.28);
             }
 
             .risk-normal { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
@@ -1581,6 +2034,7 @@ app.get("/links", requireAuth, async (req, res) => {
             .status-approved { background: rgba(34, 197, 94, 0.12); color: #86efac; border-color: rgba(34, 197, 94, 0.25); }
             .status-rejected { background: rgba(220, 38, 38, 0.12); color: #fca5a5; border-color: rgba(220, 38, 38, 0.25); }
             .status-pending { background: rgba(234, 179, 8, 0.12); color: #fde68a; border-color: rgba(234, 179, 8, 0.25); }
+            .status-review { background: rgba(59, 130, 246, 0.12); color: #93c5fd; border-color: rgba(59, 130, 246, 0.25); }
 
             .meta-row {
               display: flex;
@@ -1603,21 +2057,18 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 8px;
               word-break: break-word;
             }
-
             .link-line a {
               color: #74c4ff;
               font-size: 14px;
               font-weight: 700;
               word-break: break-all;
             }
-
             .extra-links {
               margin-top: 10px;
               display: flex;
               flex-wrap: wrap;
               gap: 8px;
             }
-
             .mini-link {
               font-size: 11px;
               color: #b5c6e7;
@@ -1640,7 +2091,6 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               align-items: center;
             }
-
             .note-input {
               flex: 1;
               min-width: 180px;
@@ -1652,7 +2102,6 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: flex-end;
             }
-
             .feed-actions form { margin: 0; }
 
             .icon-btn {
@@ -1668,27 +2117,24 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               cursor: pointer;
             }
-
             .icon-btn.danger {
               color: #ff9baa !important;
               border-color: rgba(220, 38, 38, 0.35);
             }
-
             .icon-btn.restore {
               color: #9ae6b4 !important;
               border-color: rgba(34, 197, 94, 0.35);
             }
+            .icon-btn.priority-icon {
+              color: #fde68a !important;
+              border-color: rgba(250, 204, 21, 0.30);
+            }
 
             .empty-box {
-              background: linear-gradient(180deg, rgba(10, 20, 36, 0.92), rgba(6, 14, 26, 0.88));
-              border: 1px solid rgba(102, 126, 173, 0.20);
               border-radius: 22px;
               padding: 34px 26px;
               color: #a8b7d2;
               text-align: center;
-              box-shadow:
-                0 18px 40px rgba(0,0,0,0.24),
-                inset 0 1px 0 rgba(255,255,255,0.03);
             }
 
             .right {
@@ -1696,12 +2142,19 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-direction: column;
               gap: 14px;
             }
-
             .right-card {
               border-radius: 22px;
               padding: 18px;
+              position: relative;
+              overflow: hidden;
             }
-
+            .right-card::before {
+              content: "";
+              position: absolute;
+              inset: 0;
+              background: linear-gradient(90deg, rgba(255,255,255,0.015), transparent 45%, rgba(255,221,87,0.02));
+              pointer-events: none;
+            }
             .right-title {
               font-size: 13px;
               color: #8fa0bf;
@@ -1715,23 +2168,12 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
             }
 
-            .mini-panel-btn {
-              background: #0b1421;
-              border: 1px solid rgba(73, 95, 130, 0.35);
-              border-radius: 14px;
-              padding: 12px;
-              text-align: center;
-              color: #dbe6fa;
-              font-weight: 700;
-            }
-
             .domain-list, .audit-list {
               display: flex;
               flex-direction: column;
               gap: 8px;
               margin-top: 12px;
             }
-
             .domain-item, .audit-item {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
@@ -1739,19 +2181,16 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px;
               transition: transform 0.16s ease, border-color 0.16s ease;
             }
-
             .audit-item:hover, .domain-item:hover {
               transform: translateY(-1px);
               border-color: rgba(255, 221, 87, 0.16);
             }
-
             .domain-item {
               display: flex;
               justify-content: space-between;
               align-items: center;
               gap: 8px;
             }
-
             .audit-top {
               display: flex;
               justify-content: space-between;
@@ -1759,18 +2198,41 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 12px;
               margin-bottom: 6px;
             }
-
             .audit-bottom {
               color: #c9d7ef;
               font-size: 12px;
               word-break: break-word;
             }
 
+            .domain-stat-list {
+              display: flex;
+              flex-direction: column;
+              gap: 8px;
+              margin-top: 10px;
+            }
+            .domain-stat-row {
+              display: flex;
+              justify-content: space-between;
+              gap: 8px;
+              padding: 10px 12px;
+              border-radius: 12px;
+              background: #0b1421;
+              border: 1px solid rgba(73, 95, 130, 0.35);
+              font-size: 13px;
+            }
+
+            .pagination {
+              display: flex;
+              gap: 10px;
+              flex-wrap: wrap;
+              align-items: center;
+              margin-top: 14px;
+            }
+
             @media (max-width: 1250px) {
               .content { grid-template-columns: 1fr; }
               .right { order: -1; }
             }
-
             @media (max-width: 900px) {
               .feed-card { grid-template-columns: 1fr; }
               .feed-actions {
@@ -1778,7 +2240,6 @@ app.get("/links", requireAuth, async (req, res) => {
                 justify-content: flex-start;
               }
             }
-
             @media (max-width: 800px) {
               .app-shell { display: block; padding: 10px; }
               .sidebar {
@@ -1796,8 +2257,9 @@ app.get("/links", requireAuth, async (req, res) => {
               <a href="/links"><img class="side-logo" src="/logo.png" alt="Logo" /></a>
               <a class="side-btn active" href="/links">≡</a>
               <a class="side-btn" href="/">⌂</a>
-              <a class="side-btn" href="/links/json">J</a>
-              <a class="side-btn" href="/links/export/csv">C</a>
+              <a class="side-btn" href="/links/json${buildQuery(currentQuery)}">J</a>
+              <a class="side-btn" href="/links/export/csv${buildQuery(currentQuery)}">C</a>
+              <a class="side-btn" href="/audit">A</a>
               <a class="side-btn" href="/logout">↦</a>
             </div>
 
@@ -1827,7 +2289,7 @@ app.get("/links", requireAuth, async (req, res) => {
                       <div class="stat-value">${approvedCount}</div>
                     </div>
                     <a class="top-btn green" href="/health">Bağlı</a>
-                    <a class="top-btn" href="/links">Yenile</a>
+                    <a class="top-btn" href="/links${buildQuery(currentQuery)}">Yenile</a>
                     <a class="top-btn" href="/logout">Çıkış</a>
                   </div>
                 </div>
@@ -1848,6 +2310,7 @@ app.get("/links", requireAuth, async (req, res) => {
                     <select class="select" name="status">
                       <option value="">Tüm Durumlar</option>
                       <option value="Beklemede" ${statusFilter === "Beklemede" ? "selected" : ""}>Beklemede</option>
+                      <option value="İnceleniyor" ${statusFilter === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
                       <option value="Onaylandı" ${statusFilter === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
                       <option value="Reddedildi" ${statusFilter === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
                     </select>
@@ -1866,6 +2329,20 @@ app.get("/links", requireAuth, async (req, res) => {
                       <option value="30" ${autoRefresh === "30" ? "selected" : ""}>30 sn yenile</option>
                       <option value="60" ${autoRefresh === "60" ? "selected" : ""}>60 sn yenile</option>
                     </select>
+                    <select class="select" name="sort">
+                      <option value="newest" ${sort === "newest" ? "selected" : ""}>En yeni</option>
+                      <option value="oldest" ${sort === "oldest" ? "selected" : ""}>En eski</option>
+                      <option value="risk" ${sort === "risk" ? "selected" : ""}>Risk</option>
+                      <option value="domain" ${sort === "domain" ? "selected" : ""}>Domain</option>
+                      <option value="status" ${sort === "status" ? "selected" : ""}>Durum</option>
+                    </select>
+                    <select class="select" name="per_page">
+                      <option value="20" ${perPage === 20 ? "selected" : ""}>20 kayıt</option>
+                      <option value="50" ${perPage === 50 ? "selected" : ""}>50 kayıt</option>
+                      <option value="100" ${perPage === 100 ? "selected" : ""}>100 kayıt</option>
+                    </select>
+                    <label class="pill"><input type="checkbox" name="has_note" value="1" ${hasNote ? "checked" : ""}> Notlu</label>
+                    <label class="pill"><input type="checkbox" name="priority" value="1" ${priorityOnly ? "checked" : ""}> Öncelikli</label>
                     <button class="search-btn" type="submit">Ara</button>
                     <a class="clear-btn" href="/links">Temizle</a>
                     <a class="clear-btn" href="/links?deleted=1">Çöpü Gör</a>
@@ -1881,13 +2358,19 @@ app.get("/links", requireAuth, async (req, res) => {
                     <a class="chip orange" href="/links?search=yemek">#yemek</a>
                     <a class="chip pink" href="/links?risk=Şüpheli">#şüpheli</a>
                     <a class="chip pink" href="/links?risk=Yüksek%20Risk">#yüksek-risk</a>
+                    <a class="chip orange" href="/links?priority=1">#öncelikli</a>
+                    <a class="chip green" href="/links?status=Onaylandı">#onaylı</a>
+                    <a class="chip blue" href="/links?status=İnceleniyor">#inceleniyor</a>
                   </div>
                 </div>
 
                 <div class="bulk-panel">
                   <form id="bulkForm" method="POST" action="/links/bulk-action">
+                    <label class="pill"><input id="selectAll" type="checkbox"> Tümünü Seç</label>
                     <button class="bulk-btn" type="submit" name="action" value="approve">Seçilileri Onayla</button>
+                    <button class="bulk-btn" type="submit" name="action" value="review">Seçilileri İncele</button>
                     <button class="bulk-btn" type="submit" name="action" value="reject">Seçilileri Reddet</button>
+                    <button class="bulk-btn" type="submit" name="action" value="priority">Seçilileri Öncelikli Yap</button>
                     <button class="bulk-btn" type="submit" name="action" value="delete">Seçilileri Çöpe Taşı</button>
                   </form>
                 </div>
@@ -1895,22 +2378,33 @@ app.get("/links", requireAuth, async (req, res) => {
                 ${
                   rows.length > 0
                     ? `<div class="feed-list">${cards}</div>`
-                    : `<div class="empty-box">Bu filtreye uyan kayıt yok.</div>`
+                    : `<div class="empty-box glass">Bu filtreye uyan kayıt yok.</div>`
                 }
+
+                <div class="pagination">
+                  <a class="top-btn" href="/links${buildQuery(currentQuery, { page: Math.max(safePage - 1, 1) })}">Önceki</a>
+                  <span class="pill">Sayfa ${safePage} / ${totalPages}</span>
+                  <span class="pill">Son kayıt: ${escapeHtml(lastRecordAt)}</span>
+                  <a class="top-btn" href="/links${buildQuery(currentQuery, { page: Math.min(safePage + 1, totalPages) })}">Sonraki</a>
+                  <a class="top-btn" href="/links/json${buildQuery(currentQuery)}">Filtreli JSON</a>
+                  <a class="top-btn" href="/links/export/csv${buildQuery(currentQuery)}">Filtreli CSV</a>
+                </div>
               </div>
 
               <div class="right">
-                <div class="right-card">
+                <div class="right-card glass">
                   <div class="right-title">Hızlı Erişim</div>
                   <div class="panel-buttons">
                     <a class="mini-panel-btn" href="/links">Liste</a>
-                    <a class="mini-panel-btn" href="/links/json">JSON</a>
-                    <a class="mini-panel-btn" href="/links/export/csv">CSV</a>
+                    <a class="mini-panel-btn" href="/links/json${buildQuery(currentQuery)}">JSON</a>
+                    <a class="mini-panel-btn" href="/links/export/csv${buildQuery(currentQuery)}">CSV</a>
                     <a class="mini-panel-btn" href="/find/broadcaster">Kick</a>
+                    <a class="mini-panel-btn" href="/audit">Audit</a>
+                    <a class="mini-panel-btn" href="/subscribe/chat">Sub</a>
                   </div>
                 </div>
 
-                <div class="right-card">
+                <div class="right-card glass">
                   <div class="right-title">Durum</div>
                   <div class="chip-row">
                     <div class="chip green">Render Aktif</div>
@@ -1920,14 +2414,14 @@ app.get("/links", requireAuth, async (req, res) => {
                   </div>
                 </div>
 
-                <div class="right-card">
-                  <div class="right-title">Özet</div>
-                  <div class="chip-row">
-                    <div class="chip blue">En Çok Domain: ${escapeHtml(topDomain)}</div>
+                <div class="right-card glass">
+                  <div class="right-title">Domain İstatistikleri</div>
+                  <div class="domain-stat-list">
+                    ${domainStatsHtml || `<div class="domain-item">Henüz domain verisi yok.</div>`}
                   </div>
                 </div>
 
-                <div class="right-card">
+                <div class="right-card glass">
                   <div class="right-title">Whitelist Domain</div>
                   <form class="inline-form" method="POST" action="/domains/whitelist">
                     <input class="note-input" type="text" name="domain" placeholder="ör: youtube.com" />
@@ -1938,7 +2432,7 @@ app.get("/links", requireAuth, async (req, res) => {
                   </div>
                 </div>
 
-                <div class="right-card">
+                <div class="right-card glass">
                   <div class="right-title">Blacklist Domain</div>
                   <form class="inline-form" method="POST" action="/domains/blacklist">
                     <input class="note-input" type="text" name="domain" placeholder="ör: spam-site.com" />
@@ -1949,7 +2443,7 @@ app.get("/links", requireAuth, async (req, res) => {
                   </div>
                 </div>
 
-                <div class="right-card">
+                <div class="right-card glass">
                   <div class="right-title">Son İşlemler</div>
                   <div class="audit-list">
                     ${auditHtml || `<div class="audit-item">Henüz işlem yok.</div>`}
@@ -1958,6 +2452,17 @@ app.get("/links", requireAuth, async (req, res) => {
               </div>
             </div>
           </div>
+
+          <script>
+            const selectAll = document.getElementById("selectAll");
+            if (selectAll) {
+              selectAll.addEventListener("change", function () {
+                document.querySelectorAll('input.bulk-checkbox').forEach((el) => {
+                  el.checked = selectAll.checked;
+                });
+              });
+            }
+          </script>
         </body>
       </html>
     `);
