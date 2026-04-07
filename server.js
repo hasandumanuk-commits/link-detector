@@ -174,9 +174,6 @@ async function ensureTables() {
     )
   `);
 
-  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_opened BOOLEAN DEFAULT FALSE`);
-}
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whitelist_domains (
       id SERIAL PRIMARY KEY,
@@ -220,6 +217,7 @@ async function ensureTables() {
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS moderator_note TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_priority BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS is_opened BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
 }
 
