@@ -2477,15 +2477,52 @@ app.get("/links", requireAuth, async (req, res) => {
           </div>
 
           <script>
-            const selectAll = document.getElementById("selectAll");
-            if (selectAll) {
-              selectAll.addEventListener("change", function () {
-                document.querySelectorAll('input.bulk-checkbox').forEach((el) => {
-                  el.checked = selectAll.checked;
-                });
-              });
-            }
-          </script>
+  const selectAll = document.getElementById("selectAll");
+  if (selectAll) {
+    selectAll.addEventListener("change", function () {
+      document.querySelectorAll('input.bulk-checkbox').forEach((el) => {
+        el.checked = selectAll.checked;
+      });
+    });
+  }
+
+  let latestKnownId = 0;
+
+  const idMatches = [...document.querySelectorAll(".user-badge")]
+    .map((el) => {
+      const match = (el.textContent || "").match(/ID\s+(\d+)/);
+      return match ? Number(match[1]) : 0;
+    })
+    .filter(Boolean);
+
+  if (idMatches.length) {
+    latestKnownId = Math.max(...idMatches);
+  }
+
+  async function checkLiveUpdates() {
+    try {
+      const res = await fetch("/links/live?last_id=" + latestKnownId, {
+        credentials: "same-origin"
+      });
+
+      if (!res.ok) return;
+
+      const rows = await res.json();
+
+      if (Array.isArray(rows) && rows.length > 0) {
+        const newestId = Math.max(...rows.map((r) => Number(r.id || 0)));
+        if (newestId > latestKnownId) {
+          latestKnownId = newestId;
+          window.location.reload();
+        }
+      }
+    } catch (err) {
+      console.error("LIVE UPDATE ERROR:", err);
+    }
+  }
+
+  setInterval(checkLiveUpdates, 10000);
+</script>
         </body>
       </html>
     `);
