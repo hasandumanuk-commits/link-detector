@@ -1712,19 +1712,6 @@ app.get("/links", requireAuth, async (req, res) => {
         </div>
       `
       )
-
-const blockedUsersHtml = blockedUsersResult.rows
-  .map(
-    (row) => `
-      <div class="domain-item">
-        <span>${escapeHtml(row.username)}</span>
-        <form method="POST" action="/users/block/delete/${row.id}">
-          <button type="submit" class="domain-del">Sil</button>
-        </form>
-      </div>
-    `
-  )
-  .join("");
     
     const currentQuery = {
       search: built.search,
