@@ -1571,73 +1571,53 @@ app.get("/links", requireAuth, async (req, res) => {
             : "status-pending";
 
         return `
-          <div class="feed-card ${row.is_priority ? "priority-card" : ""}">
-            <div class="feed-left">
-              <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
-              <div class="dot dot-${index % 5}"></div>
-              <div class="time-block">
-                <div class="time">${timeText}</div>
-                <div class="subtime">Kayıt #${row.id}</div>
-              </div>
-            </div>
+  <div class="feed-card ${row.is_priority ? "priority-card" : ""}">
+    <div class="feed-left">
+      <input class="bulk-checkbox" type="checkbox" name="ids" value="${row.id}" form="bulkForm" />
+      <div class="dot dot-${index % 5}"></div>
+      <div class="time-block">
+        <div class="time">${timeText}</div>
+        <div class="subtime">Kayıt #${row.id}</div>
+      </div>
+    </div>
 
-            <div class="user-row">
-  <div class="user-name">${escapeHtml(senderText)}</div>
-  <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
-                ${openedBadge}
-              </div>
+    <div class="feed-main">
+      <div class="user-row">
+        <div class="user-name">${escapeHtml(senderText)}</div>
+        <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
+        <div class="meta-chip">${escapeHtml(domainText || "-")}</div>
+      </div>
 
-              <div class="meta-row">
-  <span class="meta-chip">${escapeHtml(domainText || "-")}</span>
-</div>
+      <div class="message-line">${escapeHtml(messageText)}</div>
 
-              <div class="message-line">${escapeHtml(messageText)}</div>
+      <div class="link-line">
+        ${
+          firstLink
+            ? `<a href="/links/open/${row.id}" target="_blank">${escapeHtml(firstLink)}</a>`
+            : `<span class="muted">Link bulunamadı</span>`
+        }
+      </div>
 
-              <div class="link-line">
-                ${
-                  firstLink
-                    ? `<a href="/links/open/${row.id}" target="_blank">${escapeHtml(firstLink)}</a>`
-                    : `<span class="muted">Link bulunamadı</span>`
-                }
-              </div>
+      <div class="tools-grid">
+        <form method="POST" action="/links/status/${row.id}" class="inline-form">
+          <select name="status" class="select">
+            <option ${reviewStatus === "Beklemede" ? "selected" : ""}>Beklemede</option>
+            <option ${reviewStatus === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
+            <option ${reviewStatus === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
+            <option ${reviewStatus === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
+          </select>
+          <button type="submit" class="mini-btn">Kaydet</button>
+        </form>
+      </div>
+    </div>
 
-              ${
-                parsedLinks.length > 1
-                  ? `
-                  <div class="extra-links">
-                    ${parsedLinks
-                      .slice(1)
-                      .map(
-                        (link) =>
-                          `<a href="${escapeHtml(link)}" target="_blank" class="mini-link">${escapeHtml(link)}</a>`
-                      )
-                      .join("")}
-                  </div>
-                `
-                  : ""
-              }
-
-              <div class="tools-grid">
-                <form method="POST" action="/links/status/${row.id}" class="inline-form">
-                  <select name="status" class="select">
-                    <option ${reviewStatus === "Beklemede" ? "selected" : ""}>Beklemede</option>
-                    <option ${reviewStatus === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
-                    <option ${reviewStatus === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
-                    <option ${reviewStatus === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
-                  </select>
-                  <button type="submit" class="mini-btn">Kaydet</button>
-                </form>
-                
-              </div>
-            </div>
-
-            <div class="feed-actions">
-  <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
-    <button type="submit" class="icon-btn danger" title="Sil">Sil</button>
-  </form>        
-            </div>
-          </div>
-        `;
+    <div class="feed-actions">
+      <form method="POST" action="/links/delete/${row.id}" onsubmit="return confirm('Bu kaydı silmek istiyor musun?')">
+        <button type="submit" class="icon-btn danger" title="Sil">Sil</button>
+      </form>
+    </div>
+  </div>
+`;
       })
       .join("");
 
@@ -1971,19 +1951,19 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-list {
-              display: flex;
-              flex-direction: column;
-              gap: 12px;
-            }
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 
             .feed-card {
+  width: 100%;
   border-radius: 20px;
-  padding: 20px;
+  padding: 18px;
   display: grid;
-  grid-template-columns: 170px minmax(0, 1fr) 90px;
+  grid-template-columns: 170px minmax(0, 1fr) 100px;
   gap: 16px;
   align-items: start;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   overflow: hidden;
 }
 
@@ -2006,10 +1986,11 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-left {
-              display: flex;
-              gap: 10px;
-              align-items: center;
-            }
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
+}
 
             .bulk-checkbox {
               width: 18px;
@@ -2043,12 +2024,12 @@ app.get("/links", requireAuth, async (req, res) => {
 }
 
             .user-row {
-              display: flex;
-              align-items: center;
-              gap: 10px;
-              flex-wrap: wrap;
-              margin-bottom: 10px;
-            }
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
 
             .user-name { font-weight: 700; font-size: 15px; }
 
@@ -2094,11 +2075,11 @@ app.get("/links", requireAuth, async (req, res) => {
 }
 
             .meta-row {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 8px;
-              margin-bottom: 10px;
-            }
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
 
             .meta-chip {
               font-size: 11px;
@@ -2110,11 +2091,11 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .message-line {
-              color: #e9f1ff;
-              font-size: 14px;
-              margin-bottom: 8px;
-              word-break: break-word;
-            }
+  color: #e9f1ff;
+  font-size: 14px;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
 
             .link-line {
   min-width: 0;
@@ -2124,9 +2105,9 @@ app.get("/links", requireAuth, async (req, res) => {
   color: #7dd3fc;
   font-size: 15px;
   font-weight: 700;
+  line-height: 1.6;
   word-break: break-word;
   overflow-wrap: anywhere;
-  line-height: 1.6;
 }
 
             .extra-links {
@@ -2146,18 +2127,16 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .tools-grid {
-              display: grid;
-              grid-template-columns: 1fr;
-              gap: 10px;
-              margin-top: 14px;
-            }
+  display: block;
+  margin-top: 14px;
+}
 
             .inline-form {
-              display: flex;
-              gap: 8px;
-              flex-wrap: wrap;
-              align-items: center;
-            }
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
 
             .note-input {
               flex: 1;
@@ -2165,15 +2144,13 @@ app.get("/links", requireAuth, async (req, res) => {
             }
 
             .feed-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
+    justify-content: flex-start;
 }
 
             .feed-actions form { margin: 0; }
 
             .icon-btn {
-  min-width: 52px;
+  min-width: 56px;
   height: 38px;
   border-radius: 12px;
   border: 1px solid rgba(73, 95, 130, 0.25);
@@ -2316,12 +2293,10 @@ app.get("/links", requireAuth, async (req, res) => {
               .right { order: -1; }
             }
 
-            @media (max-width: 900px) {
-              .feed-card { grid-template-columns: 1fr; }
-              .feed-actions {
-                flex-direction: row;
-                justify-content: flex-start;
-              }
+            @media (max-width: 1100px) {
+  .feed-card {
+    grid-template-columns: 1fr;
+  }
             }
 
             @media (max-width: 800px) {
