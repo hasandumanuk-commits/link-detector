@@ -16,9 +16,8 @@ const KICK_CHANNEL_SLUG = process.env.KICK_CHANNEL_SLUG;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const SESSION_SECRET = process.env.SESSION_SECRET;
-const BLOCKED_BOT_USERNAMES = [
-  "botrix"
-];
+
+const BLOCKED_BOT_USERNAMES = ["botrix"];
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -160,6 +159,7 @@ async function ensureTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS links (
       id SERIAL PRIMARY KEY,
+      sender_username TEXT,
       message_text TEXT,
       extracted_links TEXT,
       raw_data TEXT NOT NULL,
@@ -191,6 +191,14 @@ async function ensureTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS blocked_usernames (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id SERIAL PRIMARY KEY,
       action_type TEXT NOT NULL,
@@ -200,6 +208,7 @@ async function ensureTables() {
     )
   `);
 
+  await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS sender_username TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS message_text TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS extracted_links TEXT`);
   await pool.query(`ALTER TABLE links ADD COLUMN IF NOT EXISTS link_domain TEXT`);
@@ -219,6 +228,11 @@ async function getWhitelistDomains() {
 async function getBlacklistDomains() {
   const result = await pool.query(`SELECT domain FROM blacklist_domains ORDER BY domain ASC`);
   return result.rows.map((r) => String(r.domain).toLowerCase());
+}
+
+async function getBlockedUsernames() {
+  const result = await pool.query(`SELECT username FROM blocked_usernames ORDER BY username ASC`);
+  return result.rows.map((r) => String(r.username).toLowerCase());
 }
 
 async function getAppAccessToken() {
@@ -315,13 +329,6 @@ app.get("/login", (req, res) => {
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: Arial, sans-serif;
-            color: white;
-            background:
-              radial-gradient(circle at 10% 10%, rgba(255, 221, 87, 0.12), transparent 22%),
-              radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.16), transparent 26%),
-              radial-gradient(circle at 50% 100%, rgba(255, 221, 87, 0.06), transparent 20%),
-              linear-gradient(180deg, #07122a 0%, #041126 45%, #020814 100%);
           }
           .card {
             width: 100%;
@@ -606,29 +613,37 @@ app.post("/webhook/kick", async (req, res) => {
       "";
 
     const links = extractLinks(possibleText);
-    if (!links.length) {
-  return res.status(200).json({
-    success: true,
-    skipped: true,
-    reason: "no_link_in_message"
-  });
-}
 
-    if (
-      BLOCKED_BOT_USERNAMES.includes(String(senderUsername).toLowerCase()) &&
-      links.length > 0
-    ) {
+    if (!links.length) {
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        reason: "no_link_in_message",
+      });
+    }
+
+    await ensureTables();
+
+    const blockedUsernames = await getBlockedUsernames();
+    if (blockedUsernames.includes(String(senderUsername).toLowerCase())) {
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        reason: "blocked_username",
+        username: senderUsername,
+      });
+    }
+
+    if (BLOCKED_BOT_USERNAMES.includes(String(senderUsername).toLowerCase())) {
       return res.status(200).json({
         success: true,
         skipped: true,
         reason: "blocked_bot_link",
-        username: senderUsername
+        username: senderUsername,
       });
     }
 
     const firstDomain = links.length ? getDomain(links[0]) : "";
-
-    await ensureTables();
 
     const whitelist = await getWhitelistDomains();
     const blacklist = await getBlacklistDomains();
@@ -637,6 +652,7 @@ app.post("/webhook/kick", async (req, res) => {
     await pool.query(
       `
       INSERT INTO links (
+        sender_username,
         message_text,
         extracted_links,
         raw_data,
@@ -647,9 +663,10 @@ app.post("/webhook/kick", async (req, res) => {
         is_deleted,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
       `,
       [
+        senderUsername || null,
         possibleText || null,
         JSON.stringify(links),
         JSON.stringify(payload),
@@ -670,11 +687,34 @@ app.post("/webhook/kick", async (req, res) => {
     res.status(200).json({
       success: true,
       found_links: links,
-      username: senderUsername
+      username: senderUsername,
     });
   } catch (error) {
     console.error("WEBHOOK ERROR:", error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/links/live", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const lastId = Number(req.query.last_id || 0);
+
+    const result = await pool.query(
+      `
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      FROM links
+      WHERE id > $1 AND COALESCE(is_deleted, FALSE) = FALSE
+      ORDER BY id ASC
+      LIMIT 20
+      `,
+      [lastId]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -808,12 +848,6 @@ app.post("/links/bulk-action", requireAuth, async (req, res) => {
         [numericIds]
       );
       await logAudit("BULK_DELETE", null, `ids=${numericIds.join(",")}`);
-    } else if (action === "priority") {
-      await pool.query(
-        `UPDATE links SET is_priority = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[])`,
-        [numericIds]
-      );
-      await logAudit("BULK_PRIORITY", null, `ids=${numericIds.join(",")}`);
     }
 
     res.redirect("/links");
@@ -880,6 +914,36 @@ app.post("/domains/blacklist/delete/:id", requireAuth, async (req, res) => {
   }
 });
 
+app.post("/users/block", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const username = String(req.body.username || "").trim().toLowerCase();
+    if (!username) return res.redirect("/links");
+
+    await pool.query(
+      `INSERT INTO blocked_usernames (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`,
+      [username]
+    );
+
+    await logAudit("BLOCK_USERNAME_ADD", null, username);
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Kullanıcı engelleme hatası: " + error.message);
+  }
+});
+
+app.post("/users/block/delete/:id", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    await pool.query(`DELETE FROM blocked_usernames WHERE id = $1`, [id]);
+    await logAudit("BLOCK_USERNAME_DELETE", Number(id), "silindi");
+    res.redirect("/links");
+  } catch (error) {
+    res.status(500).send("Engelli kullanıcı silme hatası: " + error.message);
+  }
+});
+
 app.get("/links/raw/:id", requireAuth, async (req, res) => {
   try {
     await ensureTables();
@@ -887,7 +951,7 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
     const id = req.params.id;
 
     const result = await pool.query(
-      `SELECT id, raw_data, created_at, updated_at FROM links WHERE id = $1 LIMIT 1`,
+      `SELECT id, sender_username, raw_data, created_at, updated_at FROM links WHERE id = $1 LIMIT 1`,
       [id]
     );
 
@@ -939,6 +1003,7 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
             </div>
             <div class="card glass">
               <h2>Kayıt #${row.id}</h2>
+              <p>Kullanıcı: ${escapeHtml(row.sender_username || "-")}</p>
               <p>Oluşturulma: ${new Date(row.created_at).toLocaleString("tr-TR")}</p>
               <p>Güncellenme: ${new Date(row.updated_at).toLocaleString("tr-TR")}</p>
               <pre>${escapeHtml(row.raw_data)}</pre>
@@ -952,80 +1017,112 @@ app.get("/links/raw/:id", requireAuth, async (req, res) => {
   }
 });
 
+function buildLinksWhere(reqQuery) {
+  const search = typeof reqQuery.search === "string" ? reqQuery.search.trim() : "";
+  const statusFilter = typeof reqQuery.status === "string" ? reqQuery.status.trim() : "";
+  const riskFilter = typeof reqQuery.risk === "string" ? reqQuery.risk.trim() : "";
+  const domainFilter = typeof reqQuery.domain === "string" ? reqQuery.domain.trim().toLowerCase() : "";
+  const deletedFilter = reqQuery.deleted === "1";
+  const perPage = Math.min(Math.max(Number(reqQuery.per_page || 20), 5), 100);
+  const page = Math.max(Number(reqQuery.page || 1), 1);
+  const sort = typeof reqQuery.sort === "string" ? reqQuery.sort.trim() : "newest";
+
+  const whereParts = [];
+  const values = [];
+  let idx = 1;
+
+  if (search) {
+    whereParts.push(`
+      (
+        CAST(id AS TEXT) ILIKE $${idx}
+        OR COALESCE(sender_username, '') ILIKE $${idx}
+        OR COALESCE(message_text, '') ILIKE $${idx}
+        OR COALESCE(extracted_links, '') ILIKE $${idx}
+        OR COALESCE(raw_data, '') ILIKE $${idx}
+        OR COALESCE(link_domain, '') ILIKE $${idx}
+        OR COALESCE(moderator_note, '') ILIKE $${idx}
+      )
+    `);
+    values.push(`%${search}%`);
+    idx++;
+  }
+
+  if (statusFilter) {
+    whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
+    values.push(statusFilter);
+    idx++;
+  }
+
+  if (riskFilter) {
+    whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
+    values.push(riskFilter);
+    idx++;
+  }
+
+  if (domainFilter) {
+    whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
+    values.push(`%${domainFilter}%`);
+    idx++;
+  }
+
+  whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
+  values.push(deletedFilter);
+
+  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+  let orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id DESC`;
+  if (sort === "oldest") {
+    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id ASC`;
+  } else if (sort === "risk") {
+    orderSql = `
+      ORDER BY
+        COALESCE(is_priority, FALSE) DESC,
+        CASE COALESCE(risk_level, 'Normal')
+          WHEN 'Yüksek Risk' THEN 1
+          WHEN 'Şüpheli' THEN 2
+          WHEN 'Davet Linki' THEN 3
+          WHEN 'Whitelist' THEN 5
+          ELSE 4
+        END ASC,
+        id DESC
+    `;
+  } else if (sort === "domain") {
+    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(link_domain, '') ASC, id DESC`;
+  } else if (sort === "status") {
+    orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(review_status, 'Beklemede') ASC, id DESC`;
+  }
+
+  return {
+    search,
+    statusFilter,
+    riskFilter,
+    domainFilter,
+    deletedFilter,
+    perPage,
+    page,
+    sort,
+    whereSql,
+    values,
+    nextIdx: idx,
+    orderSql,
+  };
+}
+
 app.get("/links/json", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
-    const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
-    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
-    const deletedFilter = req.query.deleted === "1";
-    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
-    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
-    const hasNote = req.query.has_note === "1";
-
-    const whereParts = [];
-    const values = [];
-    let idx = 1;
-
-    if (search) {
-      whereParts.push(`
-        (
-          CAST(id AS TEXT) ILIKE $${idx}
-          OR COALESCE(message_text, '') ILIKE $${idx}
-          OR COALESCE(extracted_links, '') ILIKE $${idx}
-          OR COALESCE(raw_data, '') ILIKE $${idx}
-          OR COALESCE(link_domain, '') ILIKE $${idx}
-          OR COALESCE(moderator_note, '') ILIKE $${idx}
-        )
-      `);
-      values.push(`%${search}%`);
-      idx++;
-    }
-    if (statusFilter) {
-      whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
-      values.push(statusFilter);
-      idx++;
-    }
-    if (riskFilter) {
-      whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
-      values.push(riskFilter);
-      idx++;
-    }
-    if (domainFilter) {
-      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
-      values.push(`%${domainFilter}%`);
-      idx++;
-    }
-    if (dateFrom) {
-      whereParts.push(`created_at::date >= $${idx}`);
-      values.push(dateFrom);
-      idx++;
-    }
-    if (dateTo) {
-      whereParts.push(`created_at::date <= $${idx}`);
-      values.push(dateTo);
-      idx++;
-    }
-    if (hasNote) {
-      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
-    }
-
-    whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
-    values.push(deletedFilter);
-
-    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const built = buildLinksWhere(req.query);
 
     const result = await pool.query(
       `
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
-      ${whereSql}
-      ORDER BY id DESC
+      ${built.whereSql}
+      ${built.orderSql}
       LIMIT 1000
       `,
-      values
+      built.values
     );
 
     res.json(result.rows);
@@ -1038,80 +1135,22 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
-    const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
-    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
-    const deletedFilter = req.query.deleted === "1";
-    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
-    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
-    const hasNote = req.query.has_note === "1";
-
-    const whereParts = [];
-    const values = [];
-    let idx = 1;
-
-    if (search) {
-      whereParts.push(`
-        (
-          CAST(id AS TEXT) ILIKE $${idx}
-          OR COALESCE(message_text, '') ILIKE $${idx}
-          OR COALESCE(extracted_links, '') ILIKE $${idx}
-          OR COALESCE(raw_data, '') ILIKE $${idx}
-          OR COALESCE(link_domain, '') ILIKE $${idx}
-          OR COALESCE(moderator_note, '') ILIKE $${idx}
-        )
-      `);
-      values.push(`%${search}%`);
-      idx++;
-    }
-    if (statusFilter) {
-      whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
-      values.push(statusFilter);
-      idx++;
-    }
-    if (riskFilter) {
-      whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
-      values.push(riskFilter);
-      idx++;
-    }
-    if (domainFilter) {
-      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
-      values.push(`%${domainFilter}%`);
-      idx++;
-    }
-    if (dateFrom) {
-      whereParts.push(`created_at::date >= $${idx}`);
-      values.push(dateFrom);
-      idx++;
-    }
-    if (dateTo) {
-      whereParts.push(`created_at::date <= $${idx}`);
-      values.push(dateTo);
-      idx++;
-    }
-    if (hasNote) {
-      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
-    }
-
-    whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
-    values.push(deletedFilter);
-
-    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const built = buildLinksWhere(req.query);
 
     const result = await pool.query(
       `
-      SELECT id, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
-      ${whereSql}
-      ORDER BY id DESC
+      ${built.whereSql}
+      ${built.orderSql}
       LIMIT 5000
       `,
-      values
+      built.values
     );
 
     const header = [
       "id",
+      "sender_username",
       "message_text",
       "extracted_links",
       "link_domain",
@@ -1127,6 +1166,7 @@ app.get("/links/export/csv", requireAuth, async (req, res) => {
     const rows = result.rows.map((row) =>
       [
         csvEscape(row.id),
+        csvEscape(row.sender_username),
         csvEscape(row.message_text),
         csvEscape(row.extracted_links),
         csvEscape(row.link_domain),
@@ -1329,150 +1369,32 @@ app.get("/audit", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/links/live", requireAuth, async (req, res) => {
-  try {
-    await ensureTables();
-
-    const lastId = Number(req.query.last_id || 0);
-
-    const result = await pool.query(
-      `
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
-      FROM links
-      WHERE id > $1 AND COALESCE(is_deleted, FALSE) = FALSE
-      ORDER BY id ASC
-      LIMIT 20
-      `,
-      [lastId]
-    );
-
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.get("/links", requireAuth, async (req, res) => {
   try {
     await ensureTables();
 
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
-    const riskFilter = typeof req.query.risk === "string" ? req.query.risk.trim() : "";
-    const domainFilter = typeof req.query.domain === "string" ? req.query.domain.trim().toLowerCase() : "";
-    const deletedFilter = req.query.deleted === "1";
-    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from.trim() : "";
-    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to.trim() : "";
-    const autoRefresh = typeof req.query.auto_refresh === "string" ? req.query.auto_refresh.trim() : "0";
-    const hasNote = req.query.has_note === "1";
-    const priorityOnly = req.query.priority === "1";
-    const perPage = Math.min(Math.max(Number(req.query.per_page || 20), 10), 100);
-    const page = Math.max(Number(req.query.page || 1), 1);
-    const sort = typeof req.query.sort === "string" ? req.query.sort.trim() : "newest";
-
-    const whereParts = [];
-    const values = [];
-    let idx = 1;
-
-    if (search) {
-      whereParts.push(`
-        (
-          CAST(id AS TEXT) ILIKE $${idx}
-          OR COALESCE(message_text, '') ILIKE $${idx}
-          OR COALESCE(extracted_links, '') ILIKE $${idx}
-          OR COALESCE(raw_data, '') ILIKE $${idx}
-          OR COALESCE(link_domain, '') ILIKE $${idx}
-          OR COALESCE(moderator_note, '') ILIKE $${idx}
-        )
-      `);
-      values.push(`%${search}%`);
-      idx++;
-    }
-
-    if (statusFilter) {
-      whereParts.push(`COALESCE(review_status, 'Beklemede') = $${idx}`);
-      values.push(statusFilter);
-      idx++;
-    }
-
-    if (riskFilter) {
-      whereParts.push(`COALESCE(risk_level, 'Normal') = $${idx}`);
-      values.push(riskFilter);
-      idx++;
-    }
-
-    if (domainFilter) {
-      whereParts.push(`COALESCE(link_domain, '') ILIKE $${idx}`);
-      values.push(`%${domainFilter}%`);
-      idx++;
-    }
-
-    if (dateFrom) {
-      whereParts.push(`created_at::date >= $${idx}`);
-      values.push(dateFrom);
-      idx++;
-    }
-
-    if (dateTo) {
-      whereParts.push(`created_at::date <= $${idx}`);
-      values.push(dateTo);
-      idx++;
-    }
-
-    if (hasNote) {
-      whereParts.push(`COALESCE(moderator_note, '') <> ''`);
-    }
-
-    if (priorityOnly) {
-      whereParts.push(`COALESCE(is_priority, FALSE) = TRUE`);
-    }
-
-    whereParts.push(`COALESCE(is_deleted, FALSE) = $${idx}`);
-    values.push(deletedFilter);
-
-    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
-
-    let orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id DESC`;
-    if (sort === "oldest") {
-      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, id ASC`;
-    } else if (sort === "risk") {
-      orderSql = `
-        ORDER BY
-          COALESCE(is_priority, FALSE) DESC,
-          CASE COALESCE(risk_level, 'Normal')
-            WHEN 'Yüksek Risk' THEN 1
-            WHEN 'Şüpheli' THEN 2
-            WHEN 'Davet Linki' THEN 3
-            WHEN 'Whitelist' THEN 5
-            ELSE 4
-          END ASC,
-          id DESC
-      `;
-    } else if (sort === "domain") {
-      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(link_domain, '') ASC, id DESC`;
-    } else if (sort === "status") {
-      orderSql = `ORDER BY COALESCE(is_priority, FALSE) DESC, COALESCE(review_status, 'Beklemede') ASC, id DESC`;
-    }
+    const built = buildLinksWhere(req.query);
+    const offset = (built.page - 1) * built.perPage;
 
     const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM links ${whereSql}`,
-      values
+      `SELECT COUNT(*)::int AS total FROM links ${built.whereSql}`,
+      built.values
     );
 
     const totalFiltered = countResult.rows[0]?.total || 0;
-    const totalPages = Math.max(Math.ceil(totalFiltered / perPage), 1);
-    const safePage = Math.min(page, totalPages);
-    const offset = (safePage - 1) * perPage;
+    const totalPages = Math.max(Math.ceil(totalFiltered / built.perPage), 1);
+    const safePage = Math.min(built.page, totalPages);
+    const safeOffset = (safePage - 1) * built.perPage;
 
     const result = await pool.query(
       `
-      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      SELECT id, sender_username, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
       FROM links
-      ${whereSql}
-      ${orderSql}
-      LIMIT $${idx + 1} OFFSET $${idx + 2}
+      ${built.whereSql}
+      ${built.orderSql}
+      LIMIT $${built.nextIdx + 1} OFFSET $${built.nextIdx + 2}
       `,
-      [...values, perPage, offset]
+      [...built.values, built.perPage, safeOffset]
     );
 
     const totalCountResult = await pool.query(`SELECT COUNT(*)::int AS total FROM links WHERE COALESCE(is_deleted, FALSE) = FALSE`);
@@ -1521,6 +1443,12 @@ app.get("/links", requireAuth, async (req, res) => {
       ORDER BY domain ASC
       LIMIT 20
     `);
+    const blockedUsersResult = await pool.query(`
+      SELECT id, username
+      FROM blocked_usernames
+      ORDER BY username ASC
+      LIMIT 30
+    `);
     const lastRecordResult = await pool.query(`
       SELECT created_at
       FROM links
@@ -1561,6 +1489,7 @@ app.get("/links", requireAuth, async (req, res) => {
         const riskLevel = row.risk_level || "Normal";
         const reviewStatus = row.review_status || "Beklemede";
         const noteText = row.moderator_note || "";
+        const senderText = row.sender_username || "-";
         const priorityBadge = row.is_priority ? `<div class="badge-lite priority-badge">Öncelikli</div>` : "";
 
         const riskClass =
@@ -1598,6 +1527,7 @@ app.get("/links", requireAuth, async (req, res) => {
               <div class="user-row">
                 <div class="user-name">Link Kaydı</div>
                 <div class="user-badge">ID ${row.id}</div>
+                <div class="user-badge">${escapeHtml(senderText)}</div>
                 ${priorityBadge}
                 <div class="badge-lite ${riskClass}">${escapeHtml(riskLevel)}</div>
                 <div class="badge-lite ${statusClass}">${escapeHtml(reviewStatus)}</div>
@@ -1725,31 +1655,33 @@ app.get("/links", requireAuth, async (req, res) => {
       )
       .join("");
 
-    const autoRefreshMeta =
-      autoRefresh === "30" || autoRefresh === "60"
-        ? `<meta http-equiv="refresh" content="${autoRefresh}">`
-        : "";
+    const blockedUsersHtml = blockedUsersResult.rows
+      .map(
+        (row) => `
+          <div class="domain-item">
+            <span>${escapeHtml(row.username)}</span>
+            <form method="POST" action="/users/block/delete/${row.id}">
+              <button type="submit" class="domain-del">Sil</button>
+            </form>
+          </div>
+        `
+      )
+      .join("");
 
     const currentQuery = {
-      search,
-      status: statusFilter,
-      risk: riskFilter,
-      domain: domainFilter,
-      deleted: deletedFilter ? "1" : "",
-      date_from: dateFrom,
-      date_to: dateTo,
-      auto_refresh: autoRefresh,
-      has_note: hasNote ? "1" : "",
-      priority: priorityOnly ? "1" : "",
-      per_page: perPage,
-      sort,
+      search: built.search,
+      status: built.statusFilter,
+      risk: built.riskFilter,
+      domain: built.domainFilter,
+      deleted: built.deletedFilter ? "1" : "",
+      per_page: built.perPage,
+      sort: built.sort,
     };
 
     res.send(`
       <html>
         <head>
           <meta charset="utf-8" />
-          ${autoRefreshMeta}
           <title>HasanD Link Detector</title>
           <style>
             ${baseLayoutStyles()}
@@ -1760,6 +1692,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 14px;
               padding: 14px;
             }
+
             .sidebar {
               width: 76px;
               border-radius: 24px;
@@ -1769,6 +1702,7 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: center;
               gap: 12px;
             }
+
             .side-logo {
               width: 48px;
               height: 48px;
@@ -1778,6 +1712,7 @@ app.get("/links", requireAuth, async (req, res) => {
               box-shadow: 0 0 22px rgba(255, 216, 77, 0.26);
               background: #111;
             }
+
             .side-btn {
               width: 44px;
               height: 44px;
@@ -1788,11 +1723,13 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 15px;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
+
             .side-btn:hover {
               transform: translateY(-2px);
               border-color: rgba(255, 221, 87, 0.30);
               box-shadow: 0 8px 18px rgba(0,0,0,0.28);
             }
+
             .side-btn.active {
               font-weight: bold;
               box-shadow:
@@ -1827,6 +1764,7 @@ app.get("/links", requireAuth, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
+
             .topbar::before {
               content: "";
               position: absolute;
@@ -1841,6 +1779,7 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 3px;
               text-shadow: 0 0 16px rgba(255, 221, 87, 0.08);
             }
+
             .brand-sub {
               color: #c8d4ef;
               font-size: 12px;
@@ -1864,12 +1803,14 @@ app.get("/links", requireAuth, async (req, res) => {
               text-align: center;
               box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
             }
+
             .stat-label {
               color: #7b8aa8;
               font-size: 11px;
               margin-bottom: 3px;
               letter-spacing: 0.2px;
             }
+
             .stat-value {
               font-size: 22px;
               font-weight: 800;
@@ -1885,11 +1826,13 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
+
             .top-btn:hover, .mini-panel-btn:hover {
               transform: translateY(-2px);
               box-shadow: 0 10px 20px rgba(0,0,0,0.24);
               border-color: rgba(255, 221, 87, 0.24);
             }
+
             .top-btn.green, .side-btn.active {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
@@ -1942,6 +1885,7 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 12px;
               box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
+
             .search-input {
               flex: 1;
               background: transparent;
@@ -1949,6 +1893,7 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 0;
               box-shadow: none;
             }
+
             .select:focus, .note-input:focus {
               border-color: rgba(255, 221, 87, 0.28);
               box-shadow: 0 0 0 3px rgba(255, 221, 87, 0.08);
@@ -1961,22 +1906,26 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px 12px;
               font-weight: 700;
             }
+
             .search-btn, .mini-btn, .bulk-btn, .domain-btn {
               background: linear-gradient(135deg, #ffe37a, #facc15);
               color: #0b1b44;
               border: 1px solid rgba(255, 216, 77, 0.35);
               transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
             }
+
             .search-btn:hover, .mini-btn:hover, .bulk-btn:hover, .domain-btn:hover {
               transform: translateY(-2px);
               box-shadow: 0 10px 20px rgba(0,0,0,0.22);
               filter: brightness(1.04);
             }
+
             .clear-btn {
               background: #141f2f;
               color: #dce8ff;
               border: 1px solid rgba(73, 95, 130, 0.35);
             }
+
             .domain-del {
               background: rgba(220, 38, 38, 0.16);
               color: #ffb4b4;
@@ -1991,6 +1940,7 @@ app.get("/links", requireAuth, async (req, res) => {
               color: #b6c4df;
               box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
+
             .chip.green { color: #79f0b6; border-color: rgba(13, 207, 131, 0.35); }
             .chip.pink { color: #f4a5d6; border-color: rgba(255, 95, 162, 0.35); }
             .chip.orange { color: #ffc078; border-color: rgba(255, 160, 60, 0.35); }
@@ -2018,6 +1968,7 @@ app.get("/links", requireAuth, async (req, res) => {
               align-items: start;
               transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             }
+
             .feed-card:hover {
               transform: translateY(-2px);
               border-color: rgba(255, 221, 87, 0.18);
@@ -2025,6 +1976,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 0 20px 40px rgba(0,0,0,0.30),
                 inset 0 1px 0 rgba(255,255,255,0.03);
             }
+
             .priority-card {
               border-color: rgba(250, 204, 21, 0.28);
               box-shadow:
@@ -2051,6 +2003,7 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-top: 2px;
               box-shadow: 0 0 14px currentColor;
             }
+
             .dot-0 { color: #7c3aed; background: #7c3aed; }
             .dot-1 { color: #06b6d4; background: #06b6d4; }
             .dot-2 { color: #22c55e; background: #22c55e; }
@@ -2067,7 +2020,9 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               margin-bottom: 10px;
             }
+
             .user-name { font-weight: 700; font-size: 15px; }
+
             .user-badge {
               padding: 5px 9px;
               border-radius: 999px;
@@ -2077,6 +2032,7 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 11px;
               font-weight: 700;
             }
+
             .badge-lite {
               padding: 5px 9px;
               border-radius: 999px;
@@ -2084,6 +2040,7 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               border: 1px solid transparent;
             }
+
             .priority-badge {
               background: rgba(250, 204, 21, 0.14);
               color: #fde68a;
@@ -2107,6 +2064,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 8px;
               margin-bottom: 10px;
             }
+
             .meta-chip {
               font-size: 11px;
               background: #0c1624;
@@ -2122,18 +2080,21 @@ app.get("/links", requireAuth, async (req, res) => {
               margin-bottom: 8px;
               word-break: break-word;
             }
+
             .link-line a {
               color: #74c4ff;
               font-size: 14px;
               font-weight: 700;
               word-break: break-all;
             }
+
             .extra-links {
               margin-top: 10px;
               display: flex;
               flex-wrap: wrap;
               gap: 8px;
             }
+
             .mini-link {
               font-size: 11px;
               color: #b5c6e7;
@@ -2156,6 +2117,7 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-wrap: wrap;
               align-items: center;
             }
+
             .note-input {
               flex: 1;
               min-width: 180px;
@@ -2167,6 +2129,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 10px;
               align-items: flex-end;
             }
+
             .feed-actions form { margin: 0; }
 
             .icon-btn {
@@ -2182,14 +2145,17 @@ app.get("/links", requireAuth, async (req, res) => {
               font-weight: 700;
               cursor: pointer;
             }
+
             .icon-btn.danger {
               color: #ff9baa !important;
               border-color: rgba(220, 38, 38, 0.35);
             }
+
             .icon-btn.restore {
               color: #9ae6b4 !important;
               border-color: rgba(34, 197, 94, 0.35);
             }
+
             .icon-btn.priority-icon {
               color: #fde68a !important;
               border-color: rgba(250, 204, 21, 0.30);
@@ -2207,12 +2173,14 @@ app.get("/links", requireAuth, async (req, res) => {
               flex-direction: column;
               gap: 14px;
             }
+
             .right-card {
               border-radius: 22px;
               padding: 18px;
               position: relative;
               overflow: hidden;
             }
+
             .right-card::before {
               content: "";
               position: absolute;
@@ -2220,6 +2188,7 @@ app.get("/links", requireAuth, async (req, res) => {
               background: linear-gradient(90deg, rgba(255,255,255,0.015), transparent 45%, rgba(255,221,87,0.02));
               pointer-events: none;
             }
+
             .right-title {
               font-size: 13px;
               color: #8fa0bf;
@@ -2239,6 +2208,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 8px;
               margin-top: 12px;
             }
+
             .domain-item, .audit-item {
               background: #0b1421;
               border: 1px solid rgba(73, 95, 130, 0.35);
@@ -2246,16 +2216,19 @@ app.get("/links", requireAuth, async (req, res) => {
               padding: 10px;
               transition: transform 0.16s ease, border-color 0.16s ease;
             }
+
             .audit-item:hover, .domain-item:hover {
               transform: translateY(-1px);
               border-color: rgba(255, 221, 87, 0.16);
             }
+
             .domain-item {
               display: flex;
               justify-content: space-between;
               align-items: center;
               gap: 8px;
             }
+
             .audit-top {
               display: flex;
               justify-content: space-between;
@@ -2263,6 +2236,7 @@ app.get("/links", requireAuth, async (req, res) => {
               font-size: 12px;
               margin-bottom: 6px;
             }
+
             .audit-bottom {
               color: #c9d7ef;
               font-size: 12px;
@@ -2275,6 +2249,7 @@ app.get("/links", requireAuth, async (req, res) => {
               gap: 8px;
               margin-top: 10px;
             }
+
             .domain-stat-row {
               display: flex;
               justify-content: space-between;
@@ -2298,6 +2273,7 @@ app.get("/links", requireAuth, async (req, res) => {
               .content { grid-template-columns: 1fr; }
               .right { order: -1; }
             }
+
             @media (max-width: 900px) {
               .feed-card { grid-template-columns: 1fr; }
               .feed-actions {
@@ -2305,6 +2281,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 justify-content: flex-start;
               }
             }
+
             @media (max-width: 800px) {
               .app-shell { display: block; padding: 10px; }
               .sidebar {
@@ -2333,7 +2310,7 @@ app.get("/links", requireAuth, async (req, res) => {
                 <div class="topbar">
                   <div>
                     <div class="brand-title">HasanD Link Detector</div>
-                    <div class="brand-sub">Gerçek Zamanlı Link Paneli</div>
+                    <div class="brand-sub">Gerçek Zamanlı Link Paneli • 10 sn canlı kontrol aktif</div>
                   </div>
 
                   <div class="top-actions">
@@ -2367,47 +2344,44 @@ app.get("/links", requireAuth, async (req, res) => {
                         class="search-input"
                         type="text"
                         name="search"
-                        placeholder="Link, mesaj, domain veya not ara..."
-                        value="${escapeHtml(search)}"
+                        placeholder="Link, mesaj, kullanıcı adı veya domain ara..."
+                        value="${escapeHtml(built.search)}"
                       />
                     </div>
-                    <input class="select" type="text" name="domain" placeholder="domain filtrele" value="${escapeHtml(domainFilter)}" />
+
+                    <input class="select" type="text" name="domain" placeholder="domain filtrele" value="${escapeHtml(built.domainFilter)}" />
+
                     <select class="select" name="status">
                       <option value="">Tüm Durumlar</option>
-                      <option value="Beklemede" ${statusFilter === "Beklemede" ? "selected" : ""}>Beklemede</option>
-                      <option value="İnceleniyor" ${statusFilter === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
-                      <option value="Onaylandı" ${statusFilter === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
-                      <option value="Reddedildi" ${statusFilter === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
+                      <option value="Beklemede" ${built.statusFilter === "Beklemede" ? "selected" : ""}>Beklemede</option>
+                      <option value="İnceleniyor" ${built.statusFilter === "İnceleniyor" ? "selected" : ""}>İnceleniyor</option>
+                      <option value="Onaylandı" ${built.statusFilter === "Onaylandı" ? "selected" : ""}>Onaylandı</option>
+                      <option value="Reddedildi" ${built.statusFilter === "Reddedildi" ? "selected" : ""}>Reddedildi</option>
                     </select>
+
                     <select class="select" name="risk">
                       <option value="">Tüm Riskler</option>
-                      <option value="Normal" ${riskFilter === "Normal" ? "selected" : ""}>Normal</option>
-                      <option value="Whitelist" ${riskFilter === "Whitelist" ? "selected" : ""}>Whitelist</option>
-                      <option value="Şüpheli" ${riskFilter === "Şüpheli" ? "selected" : ""}>Şüpheli</option>
-                      <option value="Davet Linki" ${riskFilter === "Davet Linki" ? "selected" : ""}>Davet Linki</option>
-                      <option value="Yüksek Risk" ${riskFilter === "Yüksek Risk" ? "selected" : ""}>Yüksek Risk</option>
+                      <option value="Normal" ${built.riskFilter === "Normal" ? "selected" : ""}>Normal</option>
+                      <option value="Whitelist" ${built.riskFilter === "Whitelist" ? "selected" : ""}>Whitelist</option>
+                      <option value="Şüpheli" ${built.riskFilter === "Şüpheli" ? "selected" : ""}>Şüpheli</option>
+                      <option value="Davet Linki" ${built.riskFilter === "Davet Linki" ? "selected" : ""}>Davet Linki</option>
+                      <option value="Yüksek Risk" ${built.riskFilter === "Yüksek Risk" ? "selected" : ""}>Yüksek Risk</option>
                     </select>
-                    <input class="select" type="date" name="date_from" value="${escapeHtml(dateFrom)}" />
-                    <input class="select" type="date" name="date_to" value="${escapeHtml(dateTo)}" />
-                    <select class="select" name="auto_refresh">
-                      <option value="0" ${autoRefresh === "0" ? "selected" : ""}>Oto yenileme kapalı</option>
-                      <option value="30" ${autoRefresh === "30" ? "selected" : ""}>30 sn yenile</option>
-                      <option value="60" ${autoRefresh === "60" ? "selected" : ""}>60 sn yenile</option>
-                    </select>
-                    <select class="select" name="sort">
-                      <option value="newest" ${sort === "newest" ? "selected" : ""}>En yeni</option>
-                      <option value="oldest" ${sort === "oldest" ? "selected" : ""}>En eski</option>
-                      <option value="risk" ${sort === "risk" ? "selected" : ""}>Risk</option>
-                      <option value="domain" ${sort === "domain" ? "selected" : ""}>Domain</option>
-                      <option value="status" ${sort === "status" ? "selected" : ""}>Durum</option>
-                    </select>
+
                     <select class="select" name="per_page">
-                      <option value="20" ${perPage === 20 ? "selected" : ""}>20 kayıt</option>
-                      <option value="50" ${perPage === 50 ? "selected" : ""}>50 kayıt</option>
-                      <option value="100" ${perPage === 100 ? "selected" : ""}>100 kayıt</option>
+                      <option value="20" ${built.perPage === 20 ? "selected" : ""}>20 kayıt</option>
+                      <option value="50" ${built.perPage === 50 ? "selected" : ""}>50 kayıt</option>
+                      <option value="100" ${built.perPage === 100 ? "selected" : ""}>100 kayıt</option>
                     </select>
-                    <label class="pill"><input type="checkbox" name="has_note" value="1" ${hasNote ? "checked" : ""}> Notlu</label>
-                    <label class="pill"><input type="checkbox" name="priority" value="1" ${priorityOnly ? "checked" : ""}> Öncelikli</label>
+
+                    <select class="select" name="sort">
+                      <option value="newest" ${built.sort === "newest" ? "selected" : ""}>En yeni</option>
+                      <option value="oldest" ${built.sort === "oldest" ? "selected" : ""}>En eski</option>
+                      <option value="risk" ${built.sort === "risk" ? "selected" : ""}>Risk</option>
+                      <option value="domain" ${built.sort === "domain" ? "selected" : ""}>Domain</option>
+                      <option value="status" ${built.sort === "status" ? "selected" : ""}>Durum</option>
+                    </select>
+
                     <button class="search-btn" type="submit">Ara</button>
                     <a class="clear-btn" href="/links">Temizle</a>
                     <a class="clear-btn" href="/links?deleted=1">Çöpü Gör</a>
@@ -2423,9 +2397,11 @@ app.get("/links", requireAuth, async (req, res) => {
                     <a class="chip orange" href="/links?search=yemek">#yemek</a>
                     <a class="chip pink" href="/links?risk=Şüpheli">#şüpheli</a>
                     <a class="chip pink" href="/links?risk=Yüksek%20Risk">#yüksek-risk</a>
-                    <a class="chip orange" href="/links?priority=1">#öncelikli</a>
                     <a class="chip green" href="/links?status=Onaylandı">#onaylı</a>
+                    <a class="chip pink" href="/links?status=Reddedildi">#reddedilen</a>
                     <a class="chip blue" href="/links?status=İnceleniyor">#inceleniyor</a>
+                    <a class="chip green" href="/links?status=Onaylandı&per_page=5">#5-onaylı</a>
+                    <a class="chip green" href="/links?status=Onaylandı&per_page=10">#10-onaylı</a>
                   </div>
                 </div>
 
@@ -2435,7 +2411,6 @@ app.get("/links", requireAuth, async (req, res) => {
                     <button class="bulk-btn" type="submit" name="action" value="approve">Seçilileri Onayla</button>
                     <button class="bulk-btn" type="submit" name="action" value="review">Seçilileri İncele</button>
                     <button class="bulk-btn" type="submit" name="action" value="reject">Seçilileri Reddet</button>
-                    <button class="bulk-btn" type="submit" name="action" value="priority">Seçilileri Öncelikli Yap</button>
                     <button class="bulk-btn" type="submit" name="action" value="delete">Seçilileri Çöpe Taşı</button>
                   </form>
                 </div>
@@ -2465,7 +2440,7 @@ app.get("/links", requireAuth, async (req, res) => {
                     <a class="mini-panel-btn" href="/links/export/csv${buildQuery(currentQuery)}">CSV</a>
                     <a class="mini-panel-btn" href="/find/broadcaster">Kick</a>
                     <a class="mini-panel-btn" href="/audit">Audit</a>
-                    <a class="mini-panel-btn" href="/subscribe/chat">Sub</a>
+                    <a class="mini-panel-btn" href="/links?status=Reddedildi">Redler</a>
                   </div>
                 </div>
 
@@ -2509,6 +2484,17 @@ app.get("/links", requireAuth, async (req, res) => {
                 </div>
 
                 <div class="right-card glass">
+                  <div class="right-title">Engelli Kullanıcılar</div>
+                  <form class="inline-form" method="POST" action="/users/block">
+                    <input class="note-input" type="text" name="username" placeholder="ör: botrix" />
+                    <button class="domain-btn" type="submit">Ekle</button>
+                  </form>
+                  <div class="domain-list">
+                    ${blockedUsersHtml || `<div class="audit-item">Henüz engelli kullanıcı yok.</div>`}
+                  </div>
+                </div>
+
+                <div class="right-card glass">
                   <div class="right-title">Son İşlemler</div>
                   <div class="audit-list">
                     ${auditHtml || `<div class="audit-item">Henüz işlem yok.</div>`}
@@ -2519,52 +2505,52 @@ app.get("/links", requireAuth, async (req, res) => {
           </div>
 
           <script>
-  const selectAll = document.getElementById("selectAll");
-  if (selectAll) {
-    selectAll.addEventListener("change", function () {
-      document.querySelectorAll('input.bulk-checkbox').forEach((el) => {
-        el.checked = selectAll.checked;
-      });
-    });
-  }
+            const selectAll = document.getElementById("selectAll");
+            if (selectAll) {
+              selectAll.addEventListener("change", function () {
+                document.querySelectorAll('input.bulk-checkbox').forEach((el) => {
+                  el.checked = selectAll.checked;
+                });
+              });
+            }
 
-  let latestKnownId = 0;
+            let latestKnownId = 0;
 
-  const idMatches = [...document.querySelectorAll(".user-badge")]
-    .map((el) => {
-      const match = (el.textContent || "").match(/ID\s+(\d+)/);
-      return match ? Number(match[1]) : 0;
-    })
-    .filter(Boolean);
+            const idMatches = [...document.querySelectorAll(".user-badge")]
+              .map((el) => {
+                const match = (el.textContent || "").match(/ID\\s+(\\d+)/);
+                return match ? Number(match[1]) : 0;
+              })
+              .filter(Boolean);
 
-  if (idMatches.length) {
-    latestKnownId = Math.max(...idMatches);
-  }
+            if (idMatches.length) {
+              latestKnownId = Math.max(...idMatches);
+            }
 
-  async function checkLiveUpdates() {
-    try {
-      const res = await fetch("/links/live?last_id=" + latestKnownId, {
-        credentials: "same-origin"
-      });
+            async function checkLiveUpdates() {
+              try {
+                const res = await fetch("/links/live?last_id=" + latestKnownId, {
+                  credentials: "same-origin"
+                });
 
-      if (!res.ok) return;
+                if (!res.ok) return;
 
-      const rows = await res.json();
+                const rows = await res.json();
 
-      if (Array.isArray(rows) && rows.length > 0) {
-        const newestId = Math.max(...rows.map((r) => Number(r.id || 0)));
-        if (newestId > latestKnownId) {
-          latestKnownId = newestId;
-          window.location.reload();
-        }
-      }
-    } catch (err) {
-      console.error("LIVE UPDATE ERROR:", err);
-    }
-  }
+                if (Array.isArray(rows) && rows.length > 0) {
+                  const newestId = Math.max(...rows.map((r) => Number(r.id || 0)));
+                  if (newestId > latestKnownId) {
+                    latestKnownId = newestId;
+                    window.location.reload();
+                  }
+                }
+              } catch (err) {
+                console.error("LIVE UPDATE ERROR:", err);
+              }
+            }
 
-  setInterval(checkLiveUpdates, 10000);
-</script>
+            setInterval(checkLiveUpdates, 10000);
+          </script>
         </body>
       </html>
     `);
