@@ -1287,6 +1287,29 @@ app.get("/audit", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/links/live", requireAuth, async (req, res) => {
+  try {
+    await ensureTables();
+
+    const lastId = Number(req.query.last_id || 0);
+
+    const result = await pool.query(
+      `
+      SELECT id, message_text, extracted_links, raw_data, link_domain, risk_level, review_status, moderator_note, is_deleted, is_priority, created_at, updated_at
+      FROM links
+      WHERE id > $1 AND COALESCE(is_deleted, FALSE) = FALSE
+      ORDER BY id ASC
+      LIMIT 20
+      `,
+      [lastId]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/links", requireAuth, async (req, res) => {
   try {
     await ensureTables();
