@@ -456,38 +456,55 @@ app.get("/find/broadcaster", requireAuth, async (req, res) => {
 
 app.get("/subscribe/chat", requireAuth, async (req, res) => {
   try {
-    const accessToken = await getAppAccessToken();
+    await ensureTables();
+
+    const tokenResult = await pool.query(
+      `SELECT raw_data FROM oauth_tokens ORDER BY id DESC LIMIT 1`
+    );
+
+    if (!tokenResult.rows.length) {
+      return res.status(400).send("Kayıtlı user token yok. Önce /auth/kick ile giriş yap.");
+    }
+
+    const tokenData = JSON.parse(tokenResult.rows[0].raw_data || "{}");
+    const accessToken = tokenData.access_token;
+
+    if (!accessToken) {
+      return res.status(400).send("Access token bulunamadı.");
+    }
 
     const broadcasterUserId = 93350154;
 
     const payload = {
+      method: "webhook",
       broadcaster_user_id: broadcasterUserId,
       events: [
         {
           name: "chat.message.sent",
-          version: 1,
-        },
-      ],
+          version: 1
+        }
+      ]
     };
 
     const subRes = await fetch("https://api.kick.com/public/v1/events/subscriptions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "Accept": "application/json"
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
 
     const bodyText = await subRes.text();
 
     res.status(subRes.status).send(
       "STATUS=" + subRes.status +
-        " | BODY=" + bodyText +
-        " | PAYLOAD=" + JSON.stringify(payload)
+      " | BODY=" + bodyText +
+      " | PAYLOAD=" + JSON.stringify(payload)
     );
   } catch (error) {
+    console.error("SUBSCRIBE CHAT ERROR:", error);
     res.status(500).send("Subscribe hatası: " + error.message);
   }
 });
