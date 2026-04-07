@@ -1492,6 +1492,20 @@ app.get("/links", requireAuth, async (req, res) => {
       ORDER BY username ASC
       LIMIT 30
     `);
+    
+    const blockedUsersHtml = blockedUsersResult.rows
+  .map(
+    (row) => `
+      <div class="domain-item">
+        <span>${escapeHtml(row.username)}</span>
+        <form method="POST" action="/users/block/delete/${row.id}">
+          <button type="submit" class="domain-del">Sil</button>
+        </form>
+      </div>
+    `
+  )
+  .join("");
+    
     const lastRecordResult = await pool.query(`
       SELECT created_at
       FROM links
