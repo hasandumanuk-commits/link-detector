@@ -459,14 +459,15 @@ app.get("/subscribe/chat", requireAuth, async (req, res) => {
     await ensureTables();
 
     const tokenResult = await pool.query(
-      `SELECT raw_data FROM oauth_tokens ORDER BY id DESC LIMIT 1`
+      `SELECT id, raw_data, created_at FROM oauth_tokens ORDER BY id DESC LIMIT 1`
     );
 
     if (!tokenResult.rows.length) {
       return res.status(400).send("Kayıtlı user token yok. Önce /auth/kick ile giriş yap.");
     }
 
-    const tokenData = JSON.parse(tokenResult.rows[0].raw_data || "{}");
+    const tokenRow = tokenResult.rows[0];
+    const tokenData = JSON.parse(tokenRow.raw_data || "{}");
     const accessToken = tokenData.access_token;
 
     if (!accessToken) {
@@ -499,7 +500,8 @@ app.get("/subscribe/chat", requireAuth, async (req, res) => {
     const bodyText = await subRes.text();
 
     res.status(subRes.status).send(
-      "STATUS=" + subRes.status +
+      "TOKEN_CREATED_AT=" + tokenRow.created_at +
+      " | STATUS=" + subRes.status +
       " | BODY=" + bodyText +
       " | PAYLOAD=" + JSON.stringify(payload)
     );
